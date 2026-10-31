@@ -233,6 +233,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
         launcherApps.registerCallback(callback, main);
 
         registerBattery();
+        registerScreenReceiver();
         initTorch();
         loadApps();
     }
@@ -1305,9 +1306,139 @@ public class MainActivity extends Activity implements IslandView.Listener {
         showMenu(a.label, labels, actions);
     }
 
+    private void openAssistant() {
+        try {
+            Intent i = new Intent(this, AssistantActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            startActivity(i);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean lockEnabled() {
+        return prefs.getBoolean("lock", false);
+    }
+
+    private void toggleLock() {
+        boolean on = !lockEnabled();
+        prefs.edit().putBoolean("lock", on).apply();
+        if (on && !Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Zezwól Fali na wyświetlanie nad innymi aplikacjami – wtedy ekran blokady pojawi się zawsze",
+                    Toast.LENGTH_LONG).show();
+            safeStart(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName())));
+        } else {
+            Toast.makeText(this, on ? "Ekran blokady włączony – wyłącz i włącz ekran" : "Ekran blokady wyłączony",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private static boolean screenReceiverRegistered = false;
+
+    /** Po wyłączeniu ekranu uruchamiamy nasz ekran blokady, żeby był gotowy po włączeniu. */
+    private void registerScreenReceiver() {
+        if (screenReceiverRegistered) return;
+        screenReceiverRegistered = true;
+        final Context app = getApplicationContext();
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                if (!Intent.ACTION_SCREEN_OFF.equals(i.getAction())) return;
+                SharedPreferences sp = app.getSharedPreferences("fala", MODE_PRIVATE);
+                if (!sp.getBoolean("lock", false)) return;
+                android.media.AudioManager am = (android.media.AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
+                int mode = am != null ? am.getMode() : 0;
+                if (mode == android.media.AudioManager.MODE_IN_CALL
+                        || mode == android.media.AudioManager.MODE_IN_COMMUNICATION
+                        || mode == android.media.AudioManager.MODE_RINGTONE) return;
+                try {
+                    Intent li = new Intent(app, LockActivity.class);
+                    li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                    app.startActivity(li);
+                } catch (Exception ignored) {
+                }
+            }
+        };
+        IntentFilter f = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+        if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(r, f, Context.RECEIVER_EXPORTED);
+        else app.registerReceiver(r, f);
+    }
+
+    private void showApiKeyDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(22), dp(22), dp(22), dp(16));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(28));
+        bg.setColor(0xF01C1C22);
+        bg.setStroke(dp(1), 0x33FFFFFF);
+        box.setBackground(bg);
+
+        TextView t = new TextView(this);
+        t.setText("Asystent Fala");
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        box.addView(t);
+        TextView d = new TextView(this);
+        d.setText("Fala odpowiada na pytania dzięki Claude. Wklej klucz API z console.anthropic.com (zaczyna się od sk-ant-). Rozmowy są płatne według cennika Anthropic. Bez klucza działają komendy: otwórz aplikację, latarka, budzik, minutnik, godzina, bateria.");
+        d.setTextColor(0xB3FFFFFF);
+        d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        d.setLineSpacing(dp(2), 1f);
+        d.setPadding(0, dp(8), 0, dp(14));
+        box.addView(d);
+        EditText key = new EditText(this);
+        key.setHint("sk-ant-…");
+        key.setHintTextColor(0x66FFFFFF);
+        key.setTextColor(Color.WHITE);
+        key.setSingleLine(true);
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setText(prefs.getString("api_key", ""));
+        box.addView(key, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setGravity(Gravity.END);
+        btns.setPadding(0, dp(12), 0, 0);
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
+        TextView voice = dialogButton(prefs.getBoolean("assistant_voice", true) ? "Głos: wł." : "Głos: wył.");
+        voice.setOnClickListener(v -> {
+            boolean on = !prefs.getBoolean("assistant_voice", true);
+            prefs.edit().putBoolean("assistant_voice", on).apply();
+            voice.setText(on ? "Głos: wł." : "Głos: wył.");
+        });
+        btns.addView(voice);
+        TextView save = dialogButton("Zapisz");
+        save.setOnClickListener(v -> {
+            prefs.edit().putString("api_key", key.getText().toString().trim()).apply();
+            dlg.dismiss();
+            Toast.makeText(this, "Zapisano. Stuknij dwa razy w pusty ekran, aby zawołać Falę.", Toast.LENGTH_LONG).show();
+        });
+        btns.addView(save);
+        box.addView(btns);
+        dlg.show();
+        if (dlg.getWindow() != null) dlg.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+    }
+
+    private TextView dialogButton(String text) {
+        TextView b = new TextView(this);
+        b.setText(text);
+        b.setTextColor(0xFF64B5FF);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        b.setPadding(dp(16), dp(10), dp(16), dp(10));
+        b.setBackground(ripple());
+        return b;
+    }
+
     private void showSettings() {
         List<String> labels = new ArrayList<>();
         List<Runnable> actions = new ArrayList<>();
+        labels.add("✦  Zapytaj Falę (asystent)");
+        actions.add(this::openAssistant);
+        labels.add("✦  Asystent: klucz API i głos");
+        actions.add(this::showApiKeyDialog);
+        labels.add(lockEnabled() ? "🔒  Ekran blokady iPhone: włączony" : "🔒  Ekran blokady iPhone: wyłączony");
+        actions.add(this::toggleLock);
         labels.add("Zmień tapetę");
         actions.add(() -> safeStart(Intent.createChooser(new Intent(Intent.ACTION_SET_WALLPAPER), "Tapeta")));
         labels.add(hasNotificationAccess() ? "Muzyka na wyspie: włączona" : "Włącz muzykę na wyspie");
@@ -1607,6 +1738,15 @@ public class MainActivity extends Activity implements IslandView.Listener {
             super(c);
             slop = ViewConfiguration.get(c).getScaledTouchSlop();
             gd = new GestureDetector(c, new GestureDetector.SimpleOnGestureListener() {
+                @Override
+                public boolean onDoubleTap(MotionEvent e) {
+                    if (!dragging) {
+                        performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK);
+                        openAssistant();
+                    }
+                    return true;
+                }
+
                 @Override
                 public void onLongPress(MotionEvent e) {
                     if (!dragging) {
