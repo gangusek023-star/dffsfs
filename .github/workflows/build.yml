@@ -37,8 +37,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: fala-v6.0.${{ github.run_number }}
+          tag_name: fala-v7.0.${{ github.run_number }}
           target_commitish: ${{ github.sha }}
-          name: Fala Launcher v6.0.${{ github.run_number }}
+          name: Fala Launcher v7.0.${{ github.run_number }}
           body: Pobierz plik Fala-Launcher.apk na telefonie i zainstaluj.
           files: Fala-Launcher.apk

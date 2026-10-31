@@ -126,7 +126,8 @@ public class LockActivity extends Activity {
             insetBottom = ins.getSystemWindowInsetBottom();
             content.setPadding(dp(20), insetTop + dp(10), dp(20), insetBottom + dp(10));
             FrameLayout.LayoutParams ilp = (FrameLayout.LayoutParams) island.getLayoutParams();
-            ilp.topMargin = Math.max(dp(6), (insetTop - island.idleH()) / 2);
+            ilp.topMargin = IslandView.topFor(this, Build.VERSION.SDK_INT >= 28 ? ins.getDisplayCutout() : null,
+                    insetTop, island.idleH());
             island.setLayoutParams(ilp);
             return ins;
         });

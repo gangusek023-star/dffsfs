@@ -214,7 +214,14 @@ public class IslandService extends Service {
                         | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        lp.y = Math.max(dp(6), (statusBarHeight() - island.idleH()) / 2);
+        android.view.DisplayCutout dc = null;
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                dc = wm.getCurrentWindowMetrics().getWindowInsets().getDisplayCutout();
+            } catch (Exception ignored) {
+            }
+        }
+        lp.y = IslandView.topFor(this, dc, statusBarHeight(), island.idleH());
         if (Build.VERSION.SDK_INT >= 28) {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }

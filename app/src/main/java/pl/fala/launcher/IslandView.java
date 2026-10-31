@@ -343,6 +343,23 @@ public class IslandView extends FrameLayout {
 
     public int idleH() { return dp(35); }
 
+    /**
+     * Pozycja wyspy: jeśli telefon ma kamerkę w otworze na środku u góry
+     * (np. Moto G24 Power), wyspa jest wyśrodkowana dokładnie na niej.
+     */
+    public static int topFor(Context c, android.view.DisplayCutout cutout, int statusBarH, int islandH) {
+        float d = c.getResources().getDisplayMetrics().density;
+        int screenW = c.getResources().getDisplayMetrics().widthPixels;
+        int fallback = Math.max(Math.round(6 * d), (statusBarH - islandH) / 2);
+        if (cutout == null || android.os.Build.VERSION.SDK_INT < 28) return fallback;
+        for (android.graphics.Rect r : cutout.getBoundingRects()) {
+            if (r.top <= 2 && Math.abs(r.centerX() - screenW / 2) < screenW * 0.12f && r.height() < islandH * 2.5f) {
+                return Math.max(Math.round(2 * d), r.centerY() - islandH / 2);
+            }
+        }
+        return fallback;
+    }
+
     public boolean isExpanded() {
         return state == S_EXPANDED;
     }

@@ -180,6 +180,7 @@ public class MainActivity extends Activity {
 
     private IslandController islandCtl;
     private IconFactory icons;
+    private android.view.DisplayCutout cutout;
     private static final int REQ_PICK_ICON = 41;
     private String pendingIconKey = null;
 
@@ -214,6 +215,7 @@ public class MainActivity extends Activity {
         root.setOnApplyWindowInsetsListener((v, ins) -> {
             insetTop = ins.getSystemWindowInsetTop();
             insetBottom = ins.getSystemWindowInsetBottom();
+            if (Build.VERSION.SDK_INT >= 28) cutout = ins.getDisplayCutout();
             applyInsets();
             return ins;
         });
@@ -411,8 +413,16 @@ public class MainActivity extends Activity {
         // ===== szuflada aplikacji =====
         drawer = new DrawerFrame(this);
         int tc = GlassDrawable.tint & 0xFFFFFF;
-        drawer.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xB3000000 | tc, 0x99000000 | tc, 0xD9000000 | tc}));
+        boolean blur = false;
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                blur = ((android.view.WindowManager) getSystemService(Context.WINDOW_SERVICE)).isCrossWindowBlurEnabled();
+            } catch (Exception ignored) {
+            }
+        }
+        drawer.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, blur
+                ? new int[]{0xB3000000 | tc, 0x99000000 | tc, 0xD9000000 | tc}
+                : new int[]{0xE6000000 | tc, 0xD9000000 | tc, 0xF2000000 | tc}));
         drawer.setVisibility(View.INVISIBLE);
         root.addView(drawer, new FrameLayout.LayoutParams(-1, -1));
 
@@ -654,7 +664,7 @@ public class MainActivity extends Activity {
         searchBar.setLayoutParams(sblp);
 
         FrameLayout.LayoutParams ilp = (FrameLayout.LayoutParams) island.getLayoutParams();
-        ilp.topMargin = Math.max(dp(6), (insetTop - island.idleH()) / 2);
+        ilp.topMargin = IslandView.topFor(this, cutout, insetTop, island.idleH());
         island.setLayoutParams(ilp);
 
         adapter.notifyDataSetChanged();
@@ -1477,8 +1487,15 @@ public class MainActivity extends Activity {
                     if (!lockEnabled()) toggleLock();
                     if (setupDlg != null) { setupDlg.dismiss(); showSetup(); }
                 }));
-        col.addView(setupRow(IslandController.hasNotificationAccess(this), "Powiadomienia i muzyka",
-                "Pokazuje powiadomienia na wyspie i blokadzie",
+        boolean notif = IslandController.hasNotificationAccess(this);
+        if (!notif && Build.VERSION.SDK_INT >= 33) {
+            col.addView(setupRow(false, "Krok 1: Ustawienia z ograniczeniami",
+                    "Android 13+ blokuje to dla aplikacji spoza Sklepu Play. Dotknij → menu ⋮ w prawym górnym rogu → „Zezwól na ustawienia z ograniczeniami”",
+                    () -> safeStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:" + getPackageName())))));
+        }
+        col.addView(setupRow(notif, notif || Build.VERSION.SDK_INT < 33 ? "Powiadomienia i muzyka" : "Krok 2: Powiadomienia i muzyka",
+                "Pokazuje powiadomienia na wyspie i blokadzie – włącz „Fala”",
                 () -> safeStart(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))));
         col.addView(setupRow(batteryUnrestricted(), "Bez ograniczeń baterii",
                 "Żeby system nie wyłączał wyspy i blokady", () -> {
