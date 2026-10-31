@@ -42,9 +42,12 @@ public class IslandView extends FrameLayout {
         void onEnableMusic();
         void onOpenMusic();
         void onExpandChanged(boolean expanded);
+        void onAssistant();
+        /** Docelowy rozmiar pigułki – starting=true przed animacją, false po jej końcu. */
+        void onIslandSize(int w, int h, boolean starting);
     }
 
-    private static final int S_IDLE = 0, S_MUSIC = 1, S_BANNER = 2, S_EXPANDED = 3;
+    private static final int S_IDLE = 0, S_MUSIC = 1, S_BANNER = 2, S_EXPANDED = 3, S_NOTIF = 4;
 
     private final float density;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -90,8 +93,17 @@ public class IslandView extends FrameLayout {
         if (state == S_BANNER) {
             state = S_IDLE;
             updateCompact();
+        } else if (state == S_NOTIF) {
+            endNotif();
         }
     };
+
+    private LinearLayout notifPanel;
+    private ImageView notifIcon;
+    private TextView notifTitle;
+    private TextView notifText;
+    private Runnable notifTap;
+    private int lastW = -1, lastH = -1;
 
     public IslandView(Context c) {
         super(c);
@@ -114,11 +126,18 @@ public class IslandView extends FrameLayout {
         setElevation(dp(4));
 
         setOnClickListener(v -> {
-            if (state == S_EXPANDED) collapse();
+            if (state == S_NOTIF) {
+                Runnable r = notifTap;
+                endNotif();
+                if (r != null) r.run();
+            } else if (state == S_EXPANDED) collapse();
             else expand(title != null);
         });
         setOnLongClickListener(v -> {
-            if (state == S_EXPANDED) {
+            if (state == S_NOTIF) {
+                endNotif();
+                expand(false);
+            } else if (state == S_EXPANDED) {
                 boolean showingMusic = musicPanel.getVisibility() == VISIBLE;
                 showPanel(!showingMusic && title != null);
             } else {
@@ -199,6 +218,7 @@ public class IslandView extends FrameLayout {
         btns.addView(torchBtn, btnLp());
         btns.addView(circleButton(R.drawable.ic_bell, () -> { if (listener != null) listener.onNotifications(); }), btnLp());
         btns.addView(circleButton(R.drawable.ic_tune, () -> { if (listener != null) listener.onSettings(); }), btnLp());
+        btns.addView(circleButton(R.drawable.ic_mic, () -> { if (listener != null) listener.onAssistant(); }), btnLp());
         musicBtn = circleButton(R.drawable.ic_music, () -> { if (listener != null) listener.onEnableMusic(); });
         btns.addView(musicBtn, btnLp());
         infoPanel.addView(btns);
@@ -250,10 +270,70 @@ public class IslandView extends FrameLayout {
         musicPanel.setVisibility(GONE);
         addView(musicPanel, new LayoutParams(expW, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
+        // ---- baner powiadomienia ----
+        notifPanel = new LinearLayout(c);
+        notifPanel.setOrientation(LinearLayout.HORIZONTAL);
+        notifPanel.setGravity(Gravity.CENTER_VERTICAL);
+        notifPanel.setPadding(dp(14), dp(12), dp(18), dp(12));
+        notifIcon = new ImageView(c);
+        notifIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        roundClip(notifIcon, dp(10));
+        notifPanel.addView(notifIcon, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        LinearLayout nCol = new LinearLayout(c);
+        nCol.setOrientation(LinearLayout.VERTICAL);
+        nCol.setPadding(dp(12), 0, 0, 0);
+        notifTitle = new TextView(c);
+        notifTitle.setTextColor(Color.WHITE);
+        notifTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        notifTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        notifTitle.setSingleLine(true);
+        notifTitle.setEllipsize(TextUtils.TruncateAt.END);
+        nCol.addView(notifTitle);
+        notifText = new TextView(c);
+        notifText.setTextColor(0xB3FFFFFF);
+        notifText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        notifText.setSingleLine(true);
+        notifText.setEllipsize(TextUtils.TruncateAt.END);
+        nCol.addView(notifText);
+        notifPanel.addView(nCol, new LinearLayout.LayoutParams(0, -2, 1f));
+        notifPanel.setVisibility(GONE);
+        addView(notifPanel, new LayoutParams(expW, dp(68), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+
         updateCompact();
     }
 
     // ---------- API ----------
+
+    /** Powiadomienie wysuwa się z wyspy jak w iOS. */
+    public void showNotification(Drawable icon, String title, String text, Runnable onTap) {
+        if (state == S_EXPANDED) return;
+        handler.removeCallbacks(bannerEnd);
+        state = S_NOTIF;
+        notifTap = onTap;
+        notifIcon.setImageDrawable(icon);
+        notifTitle.setText(title == null ? "" : title);
+        notifText.setText(text == null ? "" : text);
+        notifText.setVisibility(TextUtils.isEmpty(text) ? GONE : VISIBLE);
+        compact.animate().alpha(0f).setStartDelay(0).setDuration(90).start();
+        notifPanel.animate().cancel();
+        notifPanel.setVisibility(VISIBLE);
+        notifPanel.setAlpha(0f);
+        notifPanel.animate().alpha(1f).setStartDelay(140).setDuration(220).start();
+        animateSize(expandedWidth(), dp(68));
+        performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK);
+        handler.postDelayed(bannerEnd, 4200);
+    }
+
+    private void endNotif() {
+        if (state != S_NOTIF) return;
+        handler.removeCallbacks(bannerEnd);
+        notifTap = null;
+        state = S_IDLE;
+        notifPanel.animate().alpha(0f).setStartDelay(0).setDuration(100).withEndAction(() -> {
+            if (state != S_NOTIF) notifPanel.setVisibility(GONE);
+        }).start();
+        updateCompact();
+    }
 
     public void setListener(Listener l) {
         listener = l;
@@ -309,7 +389,7 @@ public class IslandView extends FrameLayout {
     }
 
     public void showChargingBanner() {
-        if (state == S_EXPANDED) return;
+        if (state == S_EXPANDED || state == S_NOTIF) return;
         state = S_BANNER;
         compactIcon.setVisibility(VISIBLE);
         compactIcon.setImageResource(R.drawable.ic_flash);
@@ -331,6 +411,10 @@ public class IslandView extends FrameLayout {
 
     public void expand(boolean music) {
         handler.removeCallbacks(bannerEnd);
+        if (state == S_NOTIF) {
+            notifPanel.animate().cancel();
+            notifPanel.setVisibility(GONE);
+        }
         boolean was = state == S_EXPANDED;
         state = S_EXPANDED;
         compact.animate().alpha(0f).setStartDelay(0).setDuration(90).start();
@@ -367,7 +451,7 @@ public class IslandView extends FrameLayout {
     }
 
     private void updateCompact() {
-        if (state == S_EXPANDED || state == S_BANNER) return;
+        if (state == S_EXPANDED || state == S_BANNER || state == S_NOTIF) return;
         compactIcon.setColorFilter(null);
         compactIcon.setScaleType(ImageView.ScaleType.CENTER_CROP);
         compactText.setVisibility(GONE);
@@ -440,7 +524,21 @@ public class IslandView extends FrameLayout {
         if (sizeAnim != null) sizeAnim.cancel();
         final float sw = curW, sh = curH;
         if (sw == w && sh == h) return;
+        if (listener != null) listener.onIslandSize(Math.max(w, Math.round(sw)), Math.max(h, Math.round(sh)), true);
         sizeAnim = ValueAnimator.ofFloat(0f, 1f);
+        sizeAnim.addListener(new android.animation.AnimatorListenerAdapter() {
+            boolean cancelled = false;
+
+            @Override
+            public void onAnimationCancel(android.animation.Animator a) {
+                cancelled = true;
+            }
+
+            @Override
+            public void onAnimationEnd(android.animation.Animator a) {
+                if (!cancelled && listener != null) listener.onIslandSize(w, h, false);
+            }
+        });
         sizeAnim.setDuration(480);
         sizeAnim.setInterpolator(new OvershootInterpolator(1.15f));
         sizeAnim.addUpdateListener(a -> {
@@ -454,8 +552,8 @@ public class IslandView extends FrameLayout {
     }
 
     private LinearLayout.LayoutParams btnLp() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(50), dp(50));
-        lp.rightMargin = dp(14);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(46), dp(46));
+        lp.rightMargin = dp(10);
         return lp;
     }
 

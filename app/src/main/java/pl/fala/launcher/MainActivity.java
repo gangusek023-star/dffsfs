@@ -89,7 +89,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends Activity implements IslandView.Listener {
+public class MainActivity extends Activity {
 
     // ---------- model ----------
 
@@ -178,16 +178,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
     private boolean charging = false;
     private BroadcastReceiver batteryReceiver;
 
-    private CameraManager cameraManager;
-    private String torchId;
-    private boolean torchOn = false;
-    private CameraManager.TorchCallback torchCallback;
-
-    private MediaSessionManager msm;
-    private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
-    private MediaController controller;
-    private MediaController.Callback controllerCallback;
-    private boolean mediaRegistered = false;
+    private IslandController islandCtl;
 
     // ---------- cykl życia ----------
 
@@ -233,15 +224,16 @@ public class MainActivity extends Activity implements IslandView.Listener {
         launcherApps.registerCallback(callback, main);
 
         registerBattery();
-        registerScreenReceiver();
-        initTorch();
+        LockActivity.ensureScreenReceiver(getApplicationContext());
+        islandCtl.start();
         loadApps();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        setupMedia();
+        islandCtl.refresh();
+        updateGlobalIsland();
         updateWidgetTexts();
         if (!drawerOpen) playEntrance();
     }
@@ -281,9 +273,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
         super.onDestroy();
         try { launcherApps.unregisterCallback(callback); } catch (Exception ignored) { }
         try { if (batteryReceiver != null) unregisterReceiver(batteryReceiver); } catch (Exception ignored) { }
-        try { if (cameraManager != null && torchCallback != null) cameraManager.unregisterTorchCallback(torchCallback); } catch (Exception ignored) { }
-        try { if (msm != null && sessionsListener != null) msm.removeOnActiveSessionsChangedListener(sessionsListener); } catch (Exception ignored) { }
-        try { if (controller != null && controllerCallback != null) controller.unregisterCallback(controllerCallback); } catch (Exception ignored) { }
+        islandCtl.stop();
         exec.shutdownNow();
         iconPool.shutdownNow();
     }
@@ -553,7 +543,23 @@ public class MainActivity extends Activity implements IslandView.Listener {
         root.addView(islandShield, new FrameLayout.LayoutParams(-1, -1));
 
         island = new IslandView(this);
-        island.setListener(this);
+        islandCtl = new IslandController(this, island, new IslandController.Host() {
+            @Override
+            public void onExpandChanged(boolean expanded) {
+                if (expanded) {
+                    islandShield.setVisibility(View.VISIBLE);
+                    islandShield.setAlpha(0f);
+                    islandShield.animate().alpha(1f).setDuration(200).start();
+                } else {
+                    islandShield.animate().alpha(0f).setDuration(200)
+                            .withEndAction(() -> islandShield.setVisibility(View.GONE)).start();
+                }
+            }
+
+            @Override
+            public void onIslandSize(int w, int h, boolean starting) {
+            }
+        });
         root.addView(island, new FrameLayout.LayoutParams(island.containerW(), island.containerH(),
                 Gravity.TOP | Gravity.CENTER_HORIZONTAL));
     }
@@ -1224,14 +1230,8 @@ public class MainActivity extends Activity implements IslandView.Listener {
         }
     }
 
-    @SuppressWarnings({"WrongConstant", "JavaReflectionMemberAccess"})
     private void expandNotifications() {
-        try {
-            Object sb = getSystemService("statusbar");
-            Class<?> c = Class.forName("android.app.StatusBarManager");
-            c.getMethod("expandNotificationsPanel").invoke(sb);
-        } catch (Exception ignored) {
-        }
+        IslandController.expandNotifications(this);
     }
 
     private void showAppMenu(App a) {
@@ -1315,6 +1315,52 @@ public class MainActivity extends Activity implements IslandView.Listener {
         }
     }
 
+    private boolean globalIslandPref() {
+        return prefs.getBoolean("island_global", true);
+    }
+
+    private void toggleGlobalIsland() {
+        boolean on = !globalIslandPref();
+        prefs.edit().putBoolean("island_global", on).apply();
+        if (on && !Settings.canDrawOverlays(this)) {
+            askOverlay();
+        }
+        updateGlobalIsland();
+    }
+
+    private void askOverlay() {
+        Toast.makeText(this, "Zezwól Fali na wyświetlanie nad innymi aplikacjami", Toast.LENGTH_LONG).show();
+        safeStart(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:" + getPackageName())));
+    }
+
+    /** Wyspa nad wszystkimi aplikacjami (usługa) albo tylko na ekranie głównym. */
+    private void updateGlobalIsland() {
+        boolean want = globalIslandPref();
+        boolean can = Settings.canDrawOverlays(this);
+        if (want && can) {
+            IslandService.start(this);
+            island.setVisibility(View.GONE);
+        } else {
+            IslandService.stop(this);
+            island.setVisibility(View.VISIBLE);
+            if (want && !prefs.getBoolean("asked_overlay", false)) {
+                prefs.edit().putBoolean("asked_overlay", true).apply();
+                main.postDelayed(this::showOverlayIntro, 900);
+            }
+        }
+    }
+
+    private void showOverlayIntro() {
+        List<String> labels = new ArrayList<>();
+        List<Runnable> actions = new ArrayList<>();
+        labels.add("Włącz wyspę w każdej aplikacji");
+        actions.add(this::askOverlay);
+        labels.add("Później");
+        actions.add(() -> { });
+        showMenu("Wyspa wszędzie?", labels, actions);
+    }
+
     private boolean lockEnabled() {
         return prefs.getBoolean("lock", false);
     }
@@ -1331,37 +1377,6 @@ public class MainActivity extends Activity implements IslandView.Listener {
             Toast.makeText(this, on ? "Ekran blokady włączony – wyłącz i włącz ekran" : "Ekran blokady wyłączony",
                     Toast.LENGTH_SHORT).show();
         }
-    }
-
-    private static boolean screenReceiverRegistered = false;
-
-    /** Po wyłączeniu ekranu uruchamiamy nasz ekran blokady, żeby był gotowy po włączeniu. */
-    private void registerScreenReceiver() {
-        if (screenReceiverRegistered) return;
-        screenReceiverRegistered = true;
-        final Context app = getApplicationContext();
-        BroadcastReceiver r = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context c, Intent i) {
-                if (!Intent.ACTION_SCREEN_OFF.equals(i.getAction())) return;
-                SharedPreferences sp = app.getSharedPreferences("fala", MODE_PRIVATE);
-                if (!sp.getBoolean("lock", false)) return;
-                android.media.AudioManager am = (android.media.AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
-                int mode = am != null ? am.getMode() : 0;
-                if (mode == android.media.AudioManager.MODE_IN_CALL
-                        || mode == android.media.AudioManager.MODE_IN_COMMUNICATION
-                        || mode == android.media.AudioManager.MODE_RINGTONE) return;
-                try {
-                    Intent li = new Intent(app, LockActivity.class);
-                    li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-                    app.startActivity(li);
-                } catch (Exception ignored) {
-                }
-            }
-        };
-        IntentFilter f = new IntentFilter(Intent.ACTION_SCREEN_OFF);
-        if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(r, f, Context.RECEIVER_EXPORTED);
-        else app.registerReceiver(r, f);
     }
 
     private void showApiKeyDialog() {
@@ -1439,9 +1454,11 @@ public class MainActivity extends Activity implements IslandView.Listener {
         actions.add(this::showApiKeyDialog);
         labels.add(lockEnabled() ? "🔒  Ekran blokady iPhone: włączony" : "🔒  Ekran blokady iPhone: wyłączony");
         actions.add(this::toggleLock);
+        labels.add(globalIslandPref() ? "⬬  Wyspa w każdej aplikacji: włączona" : "⬬  Wyspa w każdej aplikacji: wyłączona");
+        actions.add(this::toggleGlobalIsland);
         labels.add("Zmień tapetę");
         actions.add(() -> safeStart(Intent.createChooser(new Intent(Intent.ACTION_SET_WALLPAPER), "Tapeta")));
-        labels.add(hasNotificationAccess() ? "Muzyka na wyspie: włączona" : "Włącz muzykę na wyspie");
+        labels.add(IslandController.hasNotificationAccess(this) ? "Powiadomienia i muzyka na wyspie: włączone" : "Włącz powiadomienia i muzykę na wyspie");
         actions.add(() -> safeStart(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
         labels.add("Ustaw Falę jako ekran główny");
         actions.add(() -> safeStart(new Intent(Settings.ACTION_HOME_SETTINGS)));
@@ -1512,9 +1529,6 @@ public class MainActivity extends Activity implements IslandView.Listener {
                             || status == BatteryManager.BATTERY_STATUS_FULL;
                     widgetRing.setBattery(batteryLevel, charging);
                     widgetBattery.setText(charging ? "Ładowanie" : "Bateria");
-                    island.setBattery(batteryLevel, charging);
-                } else if (Intent.ACTION_POWER_CONNECTED.equals(act)) {
-                    main.postDelayed(() -> island.showChargingBanner(), 350);
                 }
             }
         };
@@ -1525,201 +1539,6 @@ public class MainActivity extends Activity implements IslandView.Listener {
             registerReceiver(batteryReceiver, f, Context.RECEIVER_EXPORTED);
         } else {
             registerReceiver(batteryReceiver, f);
-        }
-    }
-
-    // ---------- latarka ----------
-
-    private void initTorch() {
-        try {
-            cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-            for (String id : cameraManager.getCameraIdList()) {
-                Boolean flash = cameraManager.getCameraCharacteristics(id)
-                        .get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
-                if (flash != null && flash) {
-                    torchId = id;
-                    break;
-                }
-            }
-            torchCallback = new CameraManager.TorchCallback() {
-                @Override
-                public void onTorchModeChanged(String cameraId, boolean enabled) {
-                    if (cameraId.equals(torchId)) {
-                        torchOn = enabled;
-                        island.setTorch(enabled);
-                    }
-                }
-            };
-            cameraManager.registerTorchCallback(torchCallback, main);
-        } catch (Exception ignored) {
-        }
-    }
-
-    // ---------- muzyka ----------
-
-    private boolean hasNotificationAccess() {
-        String flat = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
-        return flat != null && flat.contains(getPackageName());
-    }
-
-    private void setupMedia() {
-        if (mediaRegistered) return;
-        boolean access = hasNotificationAccess();
-        island.setMusicAccess(access);
-        if (!access) return;
-        try {
-            msm = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
-            ComponentName cn = new ComponentName(this, MediaListener.class);
-            sessionsListener = this::pickController;
-            msm.addOnActiveSessionsChangedListener(sessionsListener, cn, main);
-            pickController(msm.getActiveSessions(cn));
-            mediaRegistered = true;
-        } catch (Exception ignored) {
-        }
-    }
-
-    private void pickController(List<MediaController> list) {
-        MediaController best = null;
-        if (list != null) {
-            for (MediaController c : list) {
-                PlaybackState s = c.getPlaybackState();
-                if (s != null && s.getState() == PlaybackState.STATE_PLAYING) {
-                    best = c;
-                    break;
-                }
-            }
-            if (best == null && !list.isEmpty()) best = list.get(0);
-        }
-        boolean same = controller != null && best != null
-                && controller.getSessionToken().equals(best.getSessionToken());
-        if (!same) {
-            if (controller != null && controllerCallback != null) {
-                try { controller.unregisterCallback(controllerCallback); } catch (Exception ignored) { }
-            }
-            controller = best;
-            if (controller != null) {
-                controllerCallback = new MediaController.Callback() {
-                    @Override
-                    public void onPlaybackStateChanged(PlaybackState state) {
-                        refreshMusic();
-                    }
-
-                    @Override
-                    public void onMetadataChanged(MediaMetadata metadata) {
-                        refreshMusic();
-                    }
-
-                    @Override
-                    public void onSessionDestroyed() {
-                        controller = null;
-                        refreshMusic();
-                    }
-                };
-                controller.registerCallback(controllerCallback, main);
-            }
-        }
-        refreshMusic();
-    }
-
-    private void refreshMusic() {
-        MediaController c = controller;
-        MediaMetadata md = c != null ? c.getMetadata() : null;
-        if (c == null || md == null) {
-            island.setMusic(null, null, null, null, false);
-            return;
-        }
-        String title = md.getString(MediaMetadata.METADATA_KEY_TITLE);
-        if (title == null) title = md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
-        String artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST);
-        if (artist == null) artist = md.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
-        Bitmap art = md.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
-        if (art == null) art = md.getBitmap(MediaMetadata.METADATA_KEY_ART);
-        if (art == null) art = md.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
-        PlaybackState s = c.getPlaybackState();
-        boolean playing = s != null && s.getState() == PlaybackState.STATE_PLAYING;
-        Drawable appIcon = null;
-        try {
-            appIcon = getPackageManager().getApplicationIcon(c.getPackageName());
-        } catch (Exception ignored) {
-        }
-        if (title == null) {
-            island.setMusic(null, null, null, null, false);
-        } else {
-            island.setMusic(title, artist, art, appIcon, playing);
-        }
-    }
-
-    // ---------- IslandView.Listener ----------
-
-    @Override
-    public void onPlayPause() {
-        if (controller == null) return;
-        PlaybackState s = controller.getPlaybackState();
-        if (s != null && s.getState() == PlaybackState.STATE_PLAYING) controller.getTransportControls().pause();
-        else controller.getTransportControls().play();
-    }
-
-    @Override
-    public void onNext() {
-        if (controller != null) controller.getTransportControls().skipToNext();
-    }
-
-    @Override
-    public void onPrev() {
-        if (controller != null) controller.getTransportControls().skipToPrevious();
-    }
-
-    @Override
-    public void onTorch() {
-        if (cameraManager == null || torchId == null) {
-            Toast.makeText(this, "Brak latarki", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        try {
-            cameraManager.setTorchMode(torchId, !torchOn);
-        } catch (Exception e) {
-            Toast.makeText(this, "Latarka jest zajęta", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    @Override
-    public void onSettings() {
-        island.collapse();
-        safeStart(new Intent(Settings.ACTION_SETTINGS));
-    }
-
-    @Override
-    public void onNotifications() {
-        island.collapse();
-        expandNotifications();
-    }
-
-    @Override
-    public void onEnableMusic() {
-        island.collapse();
-        Toast.makeText(this, "Włącz dostęp dla aplikacji Fala", Toast.LENGTH_LONG).show();
-        safeStart(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
-    }
-
-    @Override
-    public void onOpenMusic() {
-        if (controller == null) return;
-        Intent i = getPackageManager().getLaunchIntentForPackage(controller.getPackageName());
-        if (i != null) {
-            island.collapse();
-            safeStart(i);
-        }
-    }
-
-    @Override
-    public void onExpandChanged(boolean expanded) {
-        if (expanded) {
-            islandShield.setVisibility(View.VISIBLE);
-            islandShield.setAlpha(0f);
-            islandShield.animate().alpha(1f).setDuration(200).start();
-        } else {
-            islandShield.animate().alpha(0f).setDuration(200)
-                    .withEndAction(() -> islandShield.setVisibility(View.GONE)).start();
         }
     }
 

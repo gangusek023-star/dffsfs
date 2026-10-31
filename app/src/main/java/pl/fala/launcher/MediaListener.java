@@ -25,6 +25,8 @@ public class MediaListener extends NotificationListenerService {
 
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
+        IslandService s = IslandService.instance;
+        if (s != null) s.onNotification(sbn);
         Runnable r = onChange;
         if (r != null) r.run();
     }

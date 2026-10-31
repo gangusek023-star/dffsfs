@@ -63,6 +63,37 @@ public class LockActivity extends Activity {
     private boolean torchOn = false;
     private CameraManager.TorchCallback torchCallback;
     private boolean unlocking = false;
+    private IslandView island;
+    private IslandController islandCtl;
+
+    private static boolean screenReceiverRegistered = false;
+
+    /** Po wyłączeniu ekranu uruchamia ekran blokady Fali, żeby był gotowy po włączeniu. */
+    static synchronized void ensureScreenReceiver(Context app) {
+        if (screenReceiverRegistered) return;
+        screenReceiverRegistered = true;
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                if (!Intent.ACTION_SCREEN_OFF.equals(i.getAction())) return;
+                if (!app.getSharedPreferences("fala", MODE_PRIVATE).getBoolean("lock", false)) return;
+                android.media.AudioManager am = (android.media.AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
+                int mode = am != null ? am.getMode() : 0;
+                if (mode == android.media.AudioManager.MODE_IN_CALL
+                        || mode == android.media.AudioManager.MODE_IN_COMMUNICATION
+                        || mode == android.media.AudioManager.MODE_RINGTONE) return;
+                try {
+                    Intent li = new Intent(app, LockActivity.class);
+                    li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                    app.startActivity(li);
+                } catch (Exception ignored) {
+                }
+            }
+        };
+        IntentFilter f = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+        if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(r, f, Context.RECEIVER_EXPORTED);
+        else app.registerReceiver(r, f);
+    }
 
     private int dp(float v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
@@ -87,6 +118,9 @@ public class LockActivity extends Activity {
             insetTop = ins.getSystemWindowInsetTop();
             insetBottom = ins.getSystemWindowInsetBottom();
             content.setPadding(dp(20), insetTop + dp(10), dp(20), insetBottom + dp(10));
+            FrameLayout.LayoutParams ilp = (FrameLayout.LayoutParams) island.getLayoutParams();
+            ilp.topMargin = Math.max(dp(6), (insetTop - island.idleH()) / 2);
+            island.setLayoutParams(ilp);
             return ins;
         });
 
@@ -102,6 +136,7 @@ public class LockActivity extends Activity {
         else registerReceiver(unlockReceiver, f);
 
         initTorch();
+        islandCtl.start();
     }
 
     @Override
@@ -113,6 +148,7 @@ public class LockActivity extends Activity {
         content.setAlpha(1f);
         MediaListener.onChange = () -> main.post(this::refreshNotifications);
         refreshNotifications();
+        islandCtl.refresh();
         KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
         if (km != null && !km.isKeyguardLocked() && !hasWindowFocus()) {
             // ekran odblokowany w międzyczasie
@@ -129,6 +165,7 @@ public class LockActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         try { unregisterReceiver(unlockReceiver); } catch (Exception ignored) { }
+        islandCtl.stop();
         try { if (cameraManager != null && torchCallback != null) cameraManager.unregisterTorchCallback(torchCallback); } catch (Exception ignored) { }
     }
 
@@ -232,6 +269,14 @@ public class LockActivity extends Activity {
         content.addView(bar, barLp);
 
         root.setOnTouchListener(new SwipeUp());
+
+        island = new IslandView(this);
+        root.addView(island, new FrameLayout.LayoutParams(island.containerW(), island.containerH(),
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+        islandCtl = new IslandController(this, island, new IslandController.Host() {
+            @Override public void onExpandChanged(boolean expanded) { }
+            @Override public void onIslandSize(int w, int h, boolean starting) { }
+        });
     }
 
     private ImageView roundButton(int icon) {
@@ -444,6 +489,10 @@ public class LockActivity extends Activity {
         @Override
         public boolean onTouch(View v, MotionEvent e) {
             if (unlocking) return true;
+            if (island.isExpanded() && e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                island.collapse();
+                return false;
+            }
             if (vt == null) vt = VelocityTracker.obtain();
             vt.addMovement(e);
             switch (e.getActionMasked()) {
