@@ -9,6 +9,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.net.Uri
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -23,6 +25,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var coresText: TextView
     private lateinit var protectedText: TextView
     private lateinit var boostText: TextView
+    private lateinit var a11yStatus: TextView
     private val ui = Handler(Looper.getMainLooper())
     private var hasRoot = false
 
@@ -40,12 +43,40 @@ class MainActivity : AppCompatActivity() {
                 if (!hasRoot) {
                     AlertDialog.Builder(this)
                         .setTitle("Brak roota")
-                        .setMessage("Zmiana taktowania procesora i ochrona aplikacji wymagają uprawnień root (np. Magisk / KernelSU). Bez nich aplikacja pokazuje tylko odczyty.")
+                        .setMessage("Zmiana taktowania procesora wymaga uprawnień root (np. Magisk). Ochrona Not Crash działa też bez roota – włącz ją przyciskiem „Włącz ochronę (bez roota)”.")
                         .setPositiveButton("OK", null).show()
                 }
             }
         }
         ui.post(refresh)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val on = CrashWatcherService.isEnabled(this)
+        a11yStatus.text = if (on) "✅ Ochrona bez roota: WŁĄCZONA" else "❌ Ochrona bez roota: WYŁĄCZONA"
+        a11yStatus.setTextColor(if (on) Color.parseColor("#4CAF50") else Color.parseColor("#F44336"))
+    }
+
+    private fun showA11yHelp() {
+        AlertDialog.Builder(this)
+            .setTitle("Włącz ochronę Not Crash")
+            .setMessage(
+                "1. Stuknij „Otwórz ustawienia”.\n" +
+                "2. Znajdź „TurboCPU Not Crash” (czasem w sekcji „Pobrane aplikacje”) i włącz.\n\n" +
+                "Jeśli przełącznik jest szary albo pojawia się „Ustawienie z ograniczeniami”:\n" +
+                "• stuknij „Informacje o aplikacji”,\n" +
+                "• w prawym górnym rogu stuknij ⋮,\n" +
+                "• wybierz „Zezwól na ustawienia z ograniczeniami”,\n" +
+                "• wróć i włącz usługę ponownie."
+            )
+            .setPositiveButton("Otwórz ustawienia") { _, _ ->
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            .setNeutralButton("Informacje o aplikacji") { _, _ ->
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
+            .setNegativeButton("Anuluj", null).show()
     }
 
     override fun onDestroy() {
@@ -119,7 +150,7 @@ class MainActivity : AppCompatActivity() {
         ncCard.addView(header("🛡️ Not Crash – ochrona aplikacji"))
         ncCard.addView(TextView(this).apply {
             setTextColor(Color.LTGRAY); textSize = 13f
-            text = "Wybrane aplikacje nie będą zamykane przez system przy braku pamięci, a po nagłym zamknięciu uruchomią się ponownie."
+            text = "Bez roota: gdy wybrana aplikacja się zawiesi, TurboCPU kliknie „Czekaj”, a gdy się wysypie – uruchomi ją ponownie.\nZ rootem dodatkowo: system nie zamknie jej przy braku pamięci."
         })
         protectedText = TextView(this).apply { setTextColor(Color.WHITE); setPadding(0, dp(8), 0, dp(8)) }
         ncCard.addView(protectedText)
@@ -128,9 +159,27 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { pickApps("Chronione aplikacje", prefs.protectedApps) { prefs.protectedApps = it; renderLists() } }
         })
         ncCard.addView(CheckBox(this).apply {
-            text = "Automatyczny restart po zamknięciu"; setTextColor(Color.WHITE)
+            text = "Automatyczny restart po awarii"; setTextColor(Color.WHITE)
             isChecked = prefs.autoRestart
             setOnCheckedChangeListener { _, c -> prefs.autoRestart = c }
+        })
+        a11yStatus = TextView(this).apply { textSize = 15f; setPadding(0, dp(10), 0, dp(4)) }
+        ncCard.addView(a11yStatus)
+        ncCard.addView(Button(this).apply {
+            text = "Włącz ochronę (bez roota)"
+            setOnClickListener { showA11yHelp() }
+        })
+        ncCard.addView(Button(this).apply {
+            text = "Wyłącz oszczędzanie baterii dla aplikacji"
+            setOnClickListener {
+                toast("Znajdź chronioną aplikację i ustaw „Bez ograniczeń”")
+                try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                catch (e: Exception) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+            }
+        })
+        ncCard.addView(TextView(this).apply {
+            setTextColor(Color.LTGRAY); textSize = 12f
+            text = "Wskazówka: w ostatnich aplikacjach przytrzymaj kartę chronionej aplikacji i wybierz „Zablokuj”, żeby system jej nie zamykał."
         })
         root.addView(ncCard)
 
@@ -151,7 +200,7 @@ class MainActivity : AppCompatActivity() {
 
         // Guard switch
         root.addView(Switch(this).apply {
-            text = "Włącz ochronę i boost w tle"; textSize = 18f; setTextColor(Color.WHITE)
+            text = "Tryb root: ochrona pamięci i boost w tle"; textSize = 16f; setTextColor(Color.WHITE)
             setPadding(dp(8), dp(16), dp(8), dp(16))
             isChecked = prefs.guardEnabled
             setOnCheckedChangeListener { _, on ->

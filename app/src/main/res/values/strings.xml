@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_desc">TurboCPU Not Crash: wykrywa okna „aplikacja się zatrzymała” i „aplikacja nie odpowiada” dla wybranych aplikacji, automatycznie czeka na zawieszoną aplikację lub uruchamia ją ponownie po awarii. Nie zbiera ani nie wysyła żadnych danych.</string>
+</resources>
