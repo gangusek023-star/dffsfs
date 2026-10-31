@@ -179,6 +179,9 @@ public class MainActivity extends Activity {
     private BroadcastReceiver batteryReceiver;
 
     private IslandController islandCtl;
+    private IconFactory icons;
+    private static final int REQ_PICK_ICON = 41;
+    private String pendingIconKey = null;
 
     // ---------- cykl życia ----------
 
@@ -193,6 +196,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("fala", MODE_PRIVATE);
         usage = getSharedPreferences("fala_usage", MODE_PRIVATE);
         launcherApps = (LauncherApps) getSystemService(Context.LAUNCHER_APPS_SERVICE);
+        icons = new IconFactory(this, prefs);
 
         readWallpaperTint();
         buildUi();
@@ -736,7 +740,7 @@ public class MainActivity extends Activity {
         if (exec.isShutdown()) return;
         exec.execute(() -> {
             List<App> out = new ArrayList<>();
-            final int px = dp(56);
+            final int px = dp(64);
             UserManager um = (UserManager) getSystemService(Context.USER_SERVICE);
             List<Callable<Void>> jobs = new ArrayList<>();
             for (UserHandle u : um.getUserProfiles()) {
@@ -752,6 +756,8 @@ public class MainActivity extends Activity {
                     final App a = new App();
                     CharSequence l = i.getLabel();
                     a.label = l == null ? cn.getPackageName() : l.toString().trim();
+                    String customLabel = prefs.getString("label_" + cn.flattenToString() + "#" + u.hashCode(), null);
+                    if (customLabel != null && !customLabel.trim().isEmpty()) a.label = customLabel.trim();
                     a.norm = normalize(a.label).toLowerCase(Locale.ROOT);
                     a.section = sectionOf(a.norm);
                     a.component = cn;
@@ -761,7 +767,7 @@ public class MainActivity extends Activity {
                     if (a.icon == null) {
                         jobs.add(() -> {
                             try {
-                                a.icon = makeIcon(i, u, px);
+                                a.icon = icons.make(i, u, a.key, px);
                                 if (a.icon != null) iconCache.put(a.key, a.icon);
                             } catch (Exception ignored) {
                             }
@@ -905,7 +911,8 @@ public class MainActivity extends Activity {
             ImageView iv = iconView(a);
             LinearLayout cell = new LinearLayout(this);
             cell.setGravity(Gravity.CENTER);
-            cell.addView(iv, new LinearLayout.LayoutParams(dp(58), dp(58)));
+            int ds = dp(icons.homeDp() - 2);
+            cell.addView(iv, new LinearLayout.LayoutParams(ds, ds));
             dock.addView(cell, new LinearLayout.LayoutParams(0, -2, 1f));
             added++;
         }
@@ -920,7 +927,7 @@ public class MainActivity extends Activity {
         iv.setOutlineProvider(new android.view.ViewOutlineProvider() {
             @Override
             public void getOutline(View view, android.graphics.Outline outline) {
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), view.getWidth() * 0.235f);
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), icons.outlineRadius(view.getWidth()));
             }
         });
         iv.setOnClickListener(v -> launch(a, v));
@@ -937,7 +944,8 @@ public class MainActivity extends Activity {
         LinearLayout cell = new LinearLayout(this);
         cell.setOrientation(LinearLayout.VERTICAL);
         cell.setGravity(Gravity.CENTER_HORIZONTAL);
-        cell.addView(iconView(a), new LinearLayout.LayoutParams(dp(60), dp(60)));
+        int hs = dp(icons.homeDp());
+        cell.addView(iconView(a), new LinearLayout.LayoutParams(hs, hs));
         TextView t = new TextView(this);
         t.setText(a.label);
         t.setTextColor(Color.WHITE);
@@ -947,6 +955,8 @@ public class MainActivity extends Activity {
         t.setGravity(Gravity.CENTER);
         t.setShadowLayer(dp(3), 0, dp(1), 0x99000000);
         t.setPadding(dp(2), dp(6), dp(2), 0);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        if (!icons.labels()) t.setVisibility(View.GONE);
         cell.addView(t, new LinearLayout.LayoutParams(-1, -2));
         return cell;
     }
@@ -1290,6 +1300,19 @@ public class MainActivity extends Activity {
                 rebuildHome();
             });
         }
+        labels.add("✎  Zmień nazwę");
+        actions.add(() -> renameApp(a));
+        labels.add("🖼  Zmień ikonę (z galerii)");
+        actions.add(() -> pickIcon(a));
+        if (icons.hasCustom(a.key) || prefs.contains("label_" + a.key)) {
+            labels.add("↺  Przywróć oryginał");
+            actions.add(() -> {
+                icons.removeCustom(a.key);
+                prefs.edit().remove("label_" + a.key).apply();
+                iconCache.remove(a.key);
+                loadApps();
+            });
+        }
         labels.add("ⓘ  Informacje o aplikacji");
         actions.add(() -> {
             try {
@@ -1340,25 +1363,164 @@ public class MainActivity extends Activity {
         boolean can = Settings.canDrawOverlays(this);
         if (want && can) {
             IslandService.start(this);
-            island.setVisibility(View.GONE);
+            // własna wyspa launchera zostaje, dopóki nakładka faktycznie się nie pokaże
+            island.setVisibility(IslandService.isShowing() ? View.GONE : View.VISIBLE);
+            main.postDelayed(() -> island.setVisibility(IslandService.isShowing() ? View.GONE : View.VISIBLE), 900);
         } else {
             IslandService.stop(this);
             island.setVisibility(View.VISIBLE);
-            if (want && !prefs.getBoolean("asked_overlay", false)) {
-                prefs.edit().putBoolean("asked_overlay", true).apply();
-                main.postDelayed(this::showOverlayIntro, 900);
-            }
+        }
+        if (!prefs.getBoolean("setup_shown", false)) {
+            prefs.edit().putBoolean("setup_shown", true).apply();
+            main.postDelayed(this::showSetup, 1000);
+        }
+        if (setupDlg != null && setupDlg.isShowing()) {
+            setupDlg.dismiss();
+            showSetup();
         }
     }
 
-    private void showOverlayIntro() {
-        List<String> labels = new ArrayList<>();
-        List<Runnable> actions = new ArrayList<>();
-        labels.add("Włącz wyspę w każdej aplikacji");
-        actions.add(this::askOverlay);
-        labels.add("Później");
-        actions.add(() -> { });
-        showMenu("Wyspa wszędzie?", labels, actions);
+    private AlertDialog setupDlg;
+
+    private boolean isDefaultHome() {
+        try {
+            Intent h = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+            ResolveInfo ri = getPackageManager().resolveActivity(h, PackageManager.MATCH_DEFAULT_ONLY);
+            return ri != null && ri.activityInfo != null && getPackageName().equals(ri.activityInfo.packageName);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean batteryUnrestricted() {
+        android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+        return pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+    }
+
+    private static boolean isXiaomi() {
+        String m = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase(Locale.ROOT);
+        return m.contains("xiaomi") || m.contains("redmi") || m.contains("poco");
+    }
+
+    private void openXiaomiPermissions() {
+        try {
+            Intent i = new Intent("miui.intent.action.APP_PERM_EDITOR");
+            i.setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity");
+            i.putExtra("extra_pkgname", getPackageName());
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            safeStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+        }
+    }
+
+    private View setupRow(boolean ok, String title, String desc, Runnable fix) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(11), dp(12), dp(11));
+        row.setBackground(ripple());
+        TextView mark = new TextView(this);
+        mark.setText(ok ? "✓" : "!");
+        mark.setGravity(Gravity.CENTER);
+        mark.setTextColor(ok ? 0xFF111111 : Color.WHITE);
+        mark.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        mark.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(ok ? 0xFF30D158 : 0xFFFF9F0A);
+        mark.setBackground(g);
+        row.addView(mark, new LinearLayout.LayoutParams(dp(26), dp(26)));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(14), 0, 0, 0);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        col.addView(t);
+        TextView d = new TextView(this);
+        d.setText(ok ? "Gotowe" : desc);
+        d.setTextColor(ok ? 0x8030D158 | 0xFF000000 : 0xB3FFFFFF);
+        d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        col.addView(d);
+        row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+        if (!ok && fix != null) row.setOnClickListener(v -> fix.run());
+        else if (fix != null) row.setOnClickListener(v -> fix.run());
+        return row;
+    }
+
+    /** Konfiguracja: co jest włączone, czego brakuje – jedno dotknięcie naprawia. */
+    private void showSetup() {
+        LinearLayout box = dialogBox("Konfiguracja Fali");
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        sv.addView(col);
+
+        col.addView(setupRow(isDefaultHome(), "Fala jako ekran główny",
+                "Dotknij i wybierz Falę", () -> safeStart(new Intent(Settings.ACTION_HOME_SETTINGS))));
+        col.addView(setupRow(Settings.canDrawOverlays(this), "Wyświetlanie nad aplikacjami",
+                "Potrzebne dla wyspy wszędzie i ekranu blokady", this::askOverlay));
+        col.addView(setupRow(IslandService.isShowing() || !globalIslandPref(),
+                globalIslandPref() ? "Wyspa w każdej aplikacji" : "Wyspa w każdej aplikacji (wyłączona)",
+                Settings.canDrawOverlays(this) ? "Dotknij, aby uruchomić ponownie" : "Najpierw zezwól na wyświetlanie nad aplikacjami",
+                () -> {
+                    if (!globalIslandPref()) prefs.edit().putBoolean("island_global", true).apply();
+                    IslandService.stop(this);
+                    main.postDelayed(this::updateGlobalIsland, 300);
+                    main.postDelayed(() -> { if (setupDlg != null && setupDlg.isShowing()) { setupDlg.dismiss(); showSetup(); } }, 1400);
+                }));
+        col.addView(setupRow(lockEnabled(), "Ekran blokady iPhone",
+                "Dotknij, aby włączyć", () -> {
+                    if (!lockEnabled()) toggleLock();
+                    if (setupDlg != null) { setupDlg.dismiss(); showSetup(); }
+                }));
+        col.addView(setupRow(IslandController.hasNotificationAccess(this), "Powiadomienia i muzyka",
+                "Pokazuje powiadomienia na wyspie i blokadzie",
+                () -> safeStart(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))));
+        col.addView(setupRow(batteryUnrestricted(), "Bez ograniczeń baterii",
+                "Żeby system nie wyłączał wyspy i blokady", () -> {
+                    try {
+                        Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:" + getPackageName()));
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(i);
+                    } catch (Exception e) {
+                        safeStart(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    }
+                }));
+        col.addView(setupRow(checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+                "Mikrofon dla asystenta", "Dotknij, aby zezwolić",
+                () -> requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 5)));
+        if (isXiaomi()) {
+            col.addView(setupRow(false, "Xiaomi / Redmi / POCO",
+                    "Włącz: „Wyświetlaj wyskakujące okna w tle”, „Pokaż na ekranie blokady” i „Autostart”",
+                    this::openXiaomiPermissions));
+        } else {
+            col.addView(setupRow(true, "Ustawienia aplikacji Fala",
+                    "", () -> safeStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:" + getPackageName())))));
+        }
+        TextView note = new TextView(this);
+        note.setText("Po zmianach wróć tutaj – lista sama się odświeży. Ekran blokady pojawi się po wyłączeniu i włączeniu ekranu.");
+        note.setTextColor(0x99FFFFFF);
+        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        note.setPadding(dp(4), dp(12), dp(4), 0);
+        col.addView(note);
+
+        box.addView(sv, new LinearLayout.LayoutParams(-1, Math.round(getResources().getDisplayMetrics().heightPixels * 0.6f)));
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
+        LinearLayout btns = new LinearLayout(this);
+        btns.setGravity(Gravity.END);
+        btns.setPadding(0, dp(10), 0, 0);
+        TextView done = dialogButton("Zamknij");
+        done.setOnClickListener(v -> dlg.dismiss());
+        btns.addView(done);
+        box.addView(btns);
+        setupDlg = dlg;
+        showGlassDialog(dlg);
     }
 
     private boolean lockEnabled() {
@@ -1377,6 +1539,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, on ? "Ekran blokady włączony – wyłącz i włącz ekran" : "Ekran blokady wyłączony",
                     Toast.LENGTH_SHORT).show();
         }
+        if (on) updateGlobalIsland();
     }
 
     private void showApiKeyDialog() {
@@ -1445,9 +1608,280 @@ public class MainActivity extends Activity {
         return b;
     }
 
+    // ---------- dostosowywanie ikon ----------
+
+    private void reloadIcons() {
+        iconCache.clear();
+        loadApps();
+    }
+
+    private void renameApp(App a) {
+        LinearLayout box = dialogBox("Zmień nazwę");
+        EditText name = new EditText(this);
+        name.setText(a.label);
+        name.setTextColor(Color.WHITE);
+        name.setSingleLine(true);
+        name.setSelectAllOnFocus(true);
+        box.addView(name, new LinearLayout.LayoutParams(-1, -2));
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
+        LinearLayout btns = new LinearLayout(this);
+        btns.setGravity(Gravity.END);
+        btns.setPadding(0, dp(12), 0, 0);
+        TextView save = dialogButton("Zapisz");
+        save.setOnClickListener(v -> {
+            String n = name.getText().toString().trim();
+            if (n.isEmpty()) prefs.edit().remove("label_" + a.key).apply();
+            else prefs.edit().putString("label_" + a.key, n).apply();
+            dlg.dismiss();
+            loadApps();
+        });
+        btns.addView(save);
+        box.addView(btns);
+        showGlassDialog(dlg);
+        name.requestFocus();
+    }
+
+    private void pickIcon(App a) {
+        pendingIconKey = a.key;
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.setType("image/*");
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        try {
+            startActivityForResult(Intent.createChooser(i, "Wybierz obrazek ikony"), REQ_PICK_ICON);
+        } catch (Exception e) {
+            Toast.makeText(this, "Brak galerii", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PICK_ICON || resultCode != RESULT_OK || data == null || data.getData() == null
+                || pendingIconKey == null) return;
+        final Uri uri = data.getData();
+        final String key = pendingIconKey;
+        pendingIconKey = null;
+        exec.execute(() -> {
+            try {
+                android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                try (java.io.InputStream is = getContentResolver().openInputStream(uri)) {
+                    android.graphics.BitmapFactory.decodeStream(is, null, o);
+                }
+                int sample = 1;
+                while (Math.min(o.outWidth, o.outHeight) / (sample * 2) >= 256) sample *= 2;
+                o = new android.graphics.BitmapFactory.Options();
+                o.inSampleSize = sample;
+                Bitmap bm;
+                try (java.io.InputStream is = getContentResolver().openInputStream(uri)) {
+                    bm = android.graphics.BitmapFactory.decodeStream(is, null, o);
+                }
+                if (bm == null) throw new Exception("decode");
+                icons.saveCustom(key, bm);
+                iconCache.remove(key);
+                main.post(() -> {
+                    Toast.makeText(this, "Ikona zmieniona", Toast.LENGTH_SHORT).show();
+                    loadApps();
+                });
+            } catch (Exception e) {
+                main.post(() -> Toast.makeText(this, "Nie udało się wczytać obrazka", Toast.LENGTH_SHORT).show());
+            }
+        });
+    }
+
+    private LinearLayout dialogBox(String title) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(22), dp(22), dp(22), dp(16));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(28));
+        bg.setColor(0xF01C1C22);
+        bg.setStroke(dp(1), 0x33FFFFFF);
+        box.setBackground(bg);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t.setPadding(0, 0, 0, dp(12));
+        box.addView(t);
+        return box;
+    }
+
+    private void showGlassDialog(AlertDialog dlg) {
+        dlg.show();
+        if (dlg.getWindow() != null) dlg.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+    }
+
+    private TextView sectionLabel(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(0x99FFFFFF);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t.setLetterSpacing(0.1f);
+        t.setPadding(dp(2), dp(14), 0, dp(8));
+        return t;
+    }
+
+    /** Rząd przycisków-wyboru; zaznaczony jest podświetlony. */
+    private LinearLayout chips(String[] options, int selected, java.util.function.IntConsumer onPick) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        List<TextView> all = new ArrayList<>();
+        for (int i = 0; i < options.length; i++) {
+            final int idx = i;
+            TextView c = new TextView(this);
+            c.setText(options[i]);
+            c.setGravity(Gravity.CENTER);
+            c.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            c.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            c.setPadding(dp(6), dp(10), dp(6), dp(10));
+            c.setSingleLine(true);
+            all.add(c);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+            if (i > 0) lp.leftMargin = dp(6);
+            row.addView(c, lp);
+            c.setOnClickListener(v -> {
+                for (int k = 0; k < all.size(); k++) styleChip(all.get(k), k == idx);
+                onPick.accept(idx);
+            });
+        }
+        for (int k = 0; k < all.size(); k++) styleChip(all.get(k), k == selected);
+        return row;
+    }
+
+    private void styleChip(TextView c, boolean on) {
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(14));
+        g.setColor(on ? 0xFFFFFFFF : 0x1FFFFFFF);
+        g.setStroke(dp(1), on ? 0xFFFFFFFF : 0x26FFFFFF);
+        c.setBackground(g);
+        c.setTextColor(on ? 0xFF111111 : 0xE6FFFFFF);
+    }
+
+    private void showIconSettings() {
+        LinearLayout box = dialogBox("Wygląd ikon");
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        sv.addView(col);
+
+        // podgląd
+        LinearLayout preview = new LinearLayout(this);
+        preview.setGravity(Gravity.CENTER);
+        preview.setPadding(0, dp(4), 0, dp(4));
+        col.addView(preview);
+        Runnable refreshPreview = () -> {
+            preview.removeAllViews();
+            int n = 0;
+            for (String k : getList("dock")) {
+                App a = byKey.get(k);
+                if (a == null || n >= 4) continue;
+                n++;
+                ImageView iv = new ImageView(this);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(icons.homeDp() - 6), dp(icons.homeDp() - 6));
+                lp.leftMargin = dp(6);
+                lp.rightMargin = dp(6);
+                preview.addView(iv, lp);
+                final ImageView target = iv;
+                exec.execute(() -> {
+                    try {
+                        for (LauncherActivityInfo li : launcherApps.getActivityList(a.component.getPackageName(), a.user)) {
+                            if (li.getComponentName().equals(a.component)) {
+                                Bitmap bm = icons.make(li, a.user, a.key, dp(64));
+                                main.post(() -> target.setImageBitmap(bm));
+                                break;
+                            }
+                        }
+                    } catch (Exception ignored) {
+                    }
+                });
+            }
+        };
+        refreshPreview.run();
+
+        col.addView(sectionLabel("KSZTAŁT"));
+        col.addView(chips(IconFactory.SHAPES, icons.shape(), i -> {
+            prefs.edit().putInt("icon_shape", i).apply();
+            refreshPreview.run();
+        }));
+        col.addView(sectionLabel("STYL"));
+        col.addView(chips(IconFactory.STYLES, icons.style(), i -> {
+            prefs.edit().putInt("icon_style", i).apply();
+            refreshPreview.run();
+        }));
+        col.addView(sectionLabel("ROZMIAR"));
+        col.addView(chips(IconFactory.SIZES, icons.size(), i -> {
+            prefs.edit().putInt("icon_size", i).apply();
+            refreshPreview.run();
+        }));
+        col.addView(sectionLabel("PODPISY POD IKONAMI"));
+        col.addView(chips(new String[]{"Pokaż", "Ukryj"}, icons.labels() ? 0 : 1, i ->
+                prefs.edit().putBoolean("icon_labels", i == 0).apply()));
+
+        col.addView(sectionLabel("PACZKA IKON"));
+        List<String[]> packs = IconFactory.packChoices(this);
+        String cur = prefs.getString("icon_pack", "");
+        int sel = 0;
+        String[] names = new String[packs.size()];
+        for (int i = 0; i < packs.size(); i++) {
+            names[i] = packs.get(i)[1];
+            if (packs.get(i)[0].equals(cur)) sel = i;
+        }
+        LinearLayout packList = new LinearLayout(this);
+        packList.setOrientation(LinearLayout.VERTICAL);
+        List<TextView> packViews = new ArrayList<>();
+        for (int i = 0; i < packs.size(); i++) {
+            final int idx = i;
+            TextView t = new TextView(this);
+            t.setText(names[i]);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            t.setPadding(dp(14), dp(11), dp(14), dp(11));
+            packViews.add(t);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.bottomMargin = dp(6);
+            packList.addView(t, lp);
+            t.setOnClickListener(v -> {
+                for (int k = 0; k < packViews.size(); k++) styleChip(packViews.get(k), k == idx);
+                prefs.edit().putString("icon_pack", packs.get(idx)[0]).apply();
+                refreshPreview.run();
+            });
+        }
+        for (int k = 0; k < packViews.size(); k++) styleChip(packViews.get(k), k == sel);
+        col.addView(packList);
+        if (packs.size() == 1) {
+            TextView hint = new TextView(this);
+            hint.setText("Zainstaluj paczkę ikon ze Sklepu Play (np. zgodną z Nova Launcher), a pojawi się tutaj.");
+            hint.setTextColor(0x99FFFFFF);
+            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            col.addView(hint);
+        }
+        TextView tip = new TextView(this);
+        tip.setText("Pojedynczą ikonę lub nazwę zmienisz, przytrzymując aplikację.");
+        tip.setTextColor(0x99FFFFFF);
+        tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        tip.setPadding(0, dp(12), 0, 0);
+        col.addView(tip);
+
+        box.addView(sv, new LinearLayout.LayoutParams(-1, Math.round(getResources().getDisplayMetrics().heightPixels * 0.58f)));
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
+        LinearLayout btns = new LinearLayout(this);
+        btns.setGravity(Gravity.END);
+        btns.setPadding(0, dp(10), 0, 0);
+        TextView done = dialogButton("Gotowe");
+        done.setOnClickListener(v -> dlg.dismiss());
+        btns.addView(done);
+        box.addView(btns);
+        dlg.setOnDismissListener(d -> reloadIcons());
+        showGlassDialog(dlg);
+    }
+
     private void showSettings() {
         List<String> labels = new ArrayList<>();
         List<Runnable> actions = new ArrayList<>();
+        labels.add("⚙  Konfiguracja i uprawnienia");
+        actions.add(this::showSetup);
         labels.add("✦  Zapytaj Falę (asystent)");
         actions.add(this::openAssistant);
         labels.add("✦  Asystent: klucz API i głos");
@@ -1456,6 +1890,8 @@ public class MainActivity extends Activity {
         actions.add(this::toggleLock);
         labels.add(globalIslandPref() ? "⬬  Wyspa w każdej aplikacji: włączona" : "⬬  Wyspa w każdej aplikacji: wyłączona");
         actions.add(this::toggleGlobalIsland);
+        labels.add("🎨  Wygląd ikon");
+        actions.add(this::showIconSettings);
         labels.add("Zmień tapetę");
         actions.add(() -> safeStart(Intent.createChooser(new Intent(Intent.ACTION_SET_WALLPAPER), "Tapeta")));
         labels.add(IslandController.hasNotificationAccess(this) ? "Powiadomienia i muzyka na wyspie: włączone" : "Włącz powiadomienia i muzykę na wyspie");

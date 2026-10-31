@@ -68,7 +68,24 @@ public class LockActivity extends Activity {
 
     private static boolean screenReceiverRegistered = false;
 
-    /** Po wyłączeniu ekranu uruchamia ekran blokady Fali, żeby był gotowy po włączeniu. */
+    /** Uruchamia ekran blokady Fali, jeśli jest włączony i nie trwa rozmowa. */
+    static void launchIfEnabled(Context app) {
+        if (!app.getSharedPreferences("fala", MODE_PRIVATE).getBoolean("lock", false)) return;
+        android.media.AudioManager am = (android.media.AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
+        int mode = am != null ? am.getMode() : 0;
+        if (mode == android.media.AudioManager.MODE_IN_CALL
+                || mode == android.media.AudioManager.MODE_IN_COMMUNICATION
+                || mode == android.media.AudioManager.MODE_RINGTONE) return;
+        try {
+            Intent li = new Intent(app, LockActivity.class);
+            li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION
+                    | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            app.startActivity(li);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Zapasowy odbiornik, gdy usługa wyspy nie działa. */
     static synchronized void ensureScreenReceiver(Context app) {
         if (screenReceiverRegistered) return;
         screenReceiverRegistered = true;
@@ -76,18 +93,8 @@ public class LockActivity extends Activity {
             @Override
             public void onReceive(Context c, Intent i) {
                 if (!Intent.ACTION_SCREEN_OFF.equals(i.getAction())) return;
-                if (!app.getSharedPreferences("fala", MODE_PRIVATE).getBoolean("lock", false)) return;
-                android.media.AudioManager am = (android.media.AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
-                int mode = am != null ? am.getMode() : 0;
-                if (mode == android.media.AudioManager.MODE_IN_CALL
-                        || mode == android.media.AudioManager.MODE_IN_COMMUNICATION
-                        || mode == android.media.AudioManager.MODE_RINGTONE) return;
-                try {
-                    Intent li = new Intent(app, LockActivity.class);
-                    li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-                    app.startActivity(li);
-                } catch (Exception ignored) {
-                }
+                if (IslandService.instance != null) return; // usługa zajmuje się tym sama
+                launchIfEnabled(app);
             }
         };
         IntentFilter f = new IntentFilter(Intent.ACTION_SCREEN_OFF);

@@ -96,8 +96,15 @@ public class IslandService extends Service {
             public void onReceive(Context c, Intent i) {
                 String a = i.getAction();
                 if (Intent.ACTION_SCREEN_OFF.equals(a)) {
-                    locked = true;
+                    // Ekran blokady startujemy z usługi, póki nakładka jest jeszcze widoczna –
+                    // Android pozwala wtedy otworzyć okno w tle.
+                    LockActivity.launchIfEnabled(getApplicationContext());
                     island.collapse();
+                    main.postDelayed(() -> {
+                        locked = true;
+                        updateVisibility();
+                    }, 600);
+                    return;
                 } else if (Intent.ACTION_USER_PRESENT.equals(a)) {
                     locked = false;
                 } else if (Intent.ACTION_SCREEN_ON.equals(a)) {
@@ -194,18 +201,6 @@ public class IslandService extends Service {
             return false;
         });
 
-        // gry i filmy na pełnym ekranie – chowamy wyspę
-        if (Build.VERSION.SDK_INT >= 30) {
-            root.setOnApplyWindowInsetsListener((v, ins) -> {
-                boolean full = !ins.isVisible(WindowInsets.Type.statusBars());
-                if (full != fullscreenApp) {
-                    fullscreenApp = full;
-                    main.post(this::updateVisibility);
-                }
-                return ins;
-            });
-        }
-
         int type = Build.VERSION.SDK_INT >= 26
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
@@ -258,6 +253,11 @@ public class IslandService extends Service {
             wm.updateViewLayout(root, lp);
         } catch (Exception ignored) {
         }
+    }
+
+    static boolean isShowing() {
+        IslandService s = instance;
+        return s != null && s.attached && s.root != null;
     }
 
     private void updateVisibility() {
