@@ -37,6 +37,15 @@ public class MediaListener extends NotificationListenerService {
         if (r != null) r.run();
     }
 
+    static void dismiss(String key) {
+        MediaListener l = instance;
+        if (l == null) return;
+        try {
+            l.cancelNotification(key);
+        } catch (Exception ignored) {
+        }
+    }
+
     static StatusBarNotification[] current() {
         MediaListener l = instance;
         if (l == null) return new StatusBarNotification[0];

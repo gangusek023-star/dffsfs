@@ -98,6 +98,10 @@ public class IslandView extends FrameLayout {
         }
     };
 
+    private FrameLayout customPanel;
+    private java.util.function.Supplier<View> notifExpander;
+    private android.view.GestureDetector gd;
+    private boolean flung = false;
     private LinearLayout notifPanel;
     private ImageView notifIcon;
     private TextView notifTitle;
@@ -135,8 +139,14 @@ public class IslandView extends FrameLayout {
         });
         setOnLongClickListener(v -> {
             if (state == S_NOTIF) {
-                endNotif();
-                expand(false);
+                View v2 = notifExpander != null ? notifExpander.get() : null;
+                if (v2 != null) expandWithView(v2);
+                else {
+                    endNotif();
+                    expand(false);
+                }
+            } else if (state == S_EXPANDED && customPanel.getVisibility() == VISIBLE) {
+                collapse();
             } else if (state == S_EXPANDED) {
                 boolean showingMusic = musicPanel.getVisibility() == VISIBLE;
                 showPanel(!showingMusic && title != null);
@@ -299,13 +309,84 @@ public class IslandView extends FrameLayout {
         notifPanel.setVisibility(GONE);
         addView(notifPanel, new LayoutParams(expW, dp(68), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
+        // ---- rozwinięte, interaktywne powiadomienie ----
+        customPanel = new FrameLayout(c);
+        customPanel.setVisibility(GONE);
+        addView(customPanel, new LayoutParams(expW, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+        customPanel.addOnLayoutChangeListener((vv, l1, t1, r1, b1, ol1, ot1, or1, ob1) -> {
+            int h = b1 - t1;
+            if (state == S_EXPANDED && customPanel.getVisibility() == VISIBLE && h > 0 && h != ob1 - ot1) {
+                animateSize(expandedWidth(), Math.max(dp(90), h));
+            }
+        });
+
+        // przesunięcie banera: w dół = rozwiń, w górę = schowaj
+        gd = new android.view.GestureDetector(c, new android.view.GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onFling(android.view.MotionEvent e1, android.view.MotionEvent e2, float vx, float vy) {
+                if (state != S_NOTIF || Math.abs(vy) < Math.abs(vx)) return false;
+                flung = true;
+                if (vy > 0 && notifExpander != null) {
+                    View v = notifExpander.get();
+                    if (v != null) expandWithView(v);
+                } else {
+                    endNotif();
+                }
+                return true;
+            }
+        });
+
         updateCompact();
     }
 
     // ---------- API ----------
 
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent e) {
+        if (gd != null) gd.onTouchEvent(e);
+        if (flung && e.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+            flung = false;
+            android.view.MotionEvent cancel = android.view.MotionEvent.obtain(e);
+            cancel.setAction(android.view.MotionEvent.ACTION_CANCEL);
+            super.onTouchEvent(cancel);
+            cancel.recycle();
+            return true;
+        }
+        return super.onTouchEvent(e);
+    }
+
+    /** Rozwija wyspę z dowolną zawartością (np. interaktywnym powiadomieniem). */
+    public void expandWithView(View content) {
+        handler.removeCallbacks(bannerEnd);
+        if (state == S_NOTIF) {
+            notifPanel.animate().cancel();
+            notifPanel.setVisibility(GONE);
+        }
+        boolean was = state == S_EXPANDED;
+        state = S_EXPANDED;
+        compact.animate().alpha(0f).setStartDelay(0).setDuration(90).start();
+        infoPanel.setVisibility(GONE);
+        musicPanel.setVisibility(GONE);
+        customPanel.animate().cancel();
+        customPanel.removeAllViews();
+        customPanel.addView(content, new FrameLayout.LayoutParams(-1, -2));
+        customPanel.setVisibility(VISIBLE);
+        customPanel.setAlpha(0f);
+        customPanel.animate().alpha(1f).setStartDelay(120).setDuration(220).start();
+        customPanel.measure(MeasureSpec.makeMeasureSpec(expandedWidth(), MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
+        animateSize(expandedWidth(), Math.max(dp(90), customPanel.getMeasuredHeight()));
+        if (!was && listener != null) listener.onExpandChanged(true);
+    }
+
     /** Powiadomienie wysuwa się z wyspy jak w iOS. */
     public void showNotification(Drawable icon, String title, String text, Runnable onTap) {
+        showNotification(icon, title, text, onTap, null);
+    }
+
+    public void showNotification(Drawable icon, String title, String text, Runnable onTap,
+                                 java.util.function.Supplier<View> expander) {
+        notifExpander = expander;
         if (state == S_EXPANDED) return;
         handler.removeCallbacks(bannerEnd);
         state = S_NOTIF;
@@ -448,6 +529,12 @@ public class IslandView extends FrameLayout {
         musicPanel.animate().alpha(0f).setStartDelay(0).setDuration(90).withEndAction(() -> {
             if (state != S_EXPANDED) musicPanel.setVisibility(GONE);
         }).start();
+        customPanel.animate().alpha(0f).setStartDelay(0).setDuration(90).withEndAction(() -> {
+            if (state != S_EXPANDED) {
+                customPanel.setVisibility(GONE);
+                customPanel.removeAllViews();
+            }
+        }).start();
         updateCompact();
         if (listener != null) listener.onExpandChanged(false);
     }
@@ -457,6 +544,8 @@ public class IslandView extends FrameLayout {
     private void showPanel(boolean music) {
         View show = music ? musicPanel : infoPanel;
         View hide = music ? infoPanel : musicPanel;
+        customPanel.setVisibility(GONE);
+        customPanel.removeAllViews();
         hide.animate().cancel();
         hide.setVisibility(GONE);
         show.setVisibility(VISIBLE);

@@ -35,6 +35,10 @@ public class IslandController implements IslandView.Listener {
         void onExpandChanged(boolean expanded);
 
         void onIslandSize(int w, int h, boolean starting);
+
+        /** Pole tekstowe na wyspie potrzebuje klawiatury. */
+        default void onWantsKeyboard(boolean want) {
+        }
     }
 
     private final Context ctx;

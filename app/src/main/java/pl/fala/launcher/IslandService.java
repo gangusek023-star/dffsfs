@@ -183,13 +183,21 @@ public class IslandService extends Service {
             @Override
             public void onExpandChanged(boolean expanded) {
                 if (expanded) lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
-                else lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+                else {
+                    lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+                    lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                }
                 apply();
             }
 
             @Override
             public void onIslandSize(int w, int h, boolean starting) {
                 resize(w, h, starting);
+            }
+
+            @Override
+            public void onWantsKeyboard(boolean want) {
+                setFocusable(want);
             }
         });
 
@@ -254,6 +262,19 @@ public class IslandService extends Service {
         }
     }
 
+    /** Nakładka zwykle nie przejmuje klawiatury; włączamy to tylko na czas pisania odpowiedzi. */
+    private void setFocusable(boolean on) {
+        if (lp == null) return;
+        if (on) {
+            lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+                    | WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE;
+        } else {
+            lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        }
+        apply();
+    }
+
     private void apply() {
         if (!attached) return;
         try {
@@ -302,6 +323,31 @@ public class IslandService extends Service {
         final String t = title != null ? title.toString() : "";
         final String tx = text != null ? text.toString() : "";
         final Drawable ic = icon;
-        main.post(() -> island.showNotification(ic, t, tx, () -> IslandController.sendPending(this, pi)));
+        final StatusBarNotification s = sbn;
+        main.post(() -> island.showNotification(ic, t, tx, () -> IslandController.sendPending(this, pi),
+                () -> NotifUi.card(this, s, false, new NotifUi.Callbacks() {
+                    @Override
+                    public void onOpen(PendingIntent p) {
+                        setFocusable(false);
+                        island.collapse();
+                        IslandController.sendPending(IslandService.this, p);
+                    }
+
+                    @Override
+                    public void onActivityAction(PendingIntent p) {
+                        onOpen(p);
+                    }
+
+                    @Override
+                    public void onDone() {
+                        setFocusable(false);
+                        island.collapse();
+                    }
+
+                    @Override
+                    public void onWantsKeyboard(boolean want) {
+                        setFocusable(want);
+                    }
+                })));
     }
 }

@@ -299,6 +299,11 @@ public class LockActivity extends Activity {
     // ---------- powiadomienia ----------
 
     private void refreshNotifications() {
+        if (replying) {
+            // nie przerywaj pisania odpowiedzi
+            refreshPending = true;
+            return;
+        }
         notifList.removeAllViews();
         List<StatusBarNotification> list = new ArrayList<>(Arrays.asList(MediaListener.current()));
         list.removeIf(s -> !s.isClearable() || s.getPackageName().equals(getPackageName())
@@ -314,73 +319,30 @@ public class LockActivity extends Activity {
         }
     }
 
+    private boolean replying = false;
+    private boolean refreshPending = false;
+
     private View notifCard(StatusBarNotification sbn) {
-        Notification nf = sbn.getNotification();
-        Bundle ex = nf.extras;
-        CharSequence title = ex.getCharSequence(Notification.EXTRA_TITLE);
-        CharSequence text = ex.getCharSequence(Notification.EXTRA_TEXT);
-        if (TextUtils.isEmpty(title) && TextUtils.isEmpty(text)) return null;
+        if (!NotifUi.usable(sbn)) return null;
+        return NotifUi.card(this, sbn, true, new NotifUi.Callbacks() {
+            @Override public void onOpen(PendingIntent pi) { unlock(pi); }
+            @Override public void onActivityAction(PendingIntent pi) { unlock(pi); }
 
-        PackageManager pm = getPackageManager();
-        String appName = sbn.getPackageName();
-        Drawable icon = null;
-        try {
-            appName = pm.getApplicationLabel(pm.getApplicationInfo(sbn.getPackageName(), 0)).toString();
-            icon = pm.getApplicationIcon(sbn.getPackageName());
-        } catch (Exception ignored) {
-        }
+            @Override
+            public void onDone() {
+                replying = false;
+                refreshNotifications();
+            }
 
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(new GlassDrawable(getResources().getDisplayMetrics().density, dp(22), 1.15f));
-        card.setPadding(dp(14), dp(12), dp(14), dp(13));
-
-        LinearLayout head = new LinearLayout(this);
-        head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setGravity(Gravity.CENTER_VERTICAL);
-        ImageView iv = new ImageView(this);
-        iv.setImageDrawable(icon);
-        head.addView(iv, new LinearLayout.LayoutParams(dp(20), dp(20)));
-        TextView app = new TextView(this);
-        app.setText(appName);
-        app.setTextColor(0xCCFFFFFF);
-        app.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        app.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        app.setPadding(dp(8), 0, 0, 0);
-        app.setSingleLine(true);
-        head.addView(app, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView when = new TextView(this);
-        when.setText(DateUtils.getRelativeTimeSpanString(sbn.getPostTime(), System.currentTimeMillis(),
-                DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE));
-        when.setTextColor(0x99FFFFFF);
-        when.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        head.addView(when);
-        card.addView(head);
-
-        if (!TextUtils.isEmpty(title)) {
-            TextView t = new TextView(this);
-            t.setText(title);
-            t.setTextColor(Color.WHITE);
-            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-            t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            t.setSingleLine(true);
-            t.setEllipsize(TextUtils.TruncateAt.END);
-            t.setPadding(0, dp(8), 0, 0);
-            card.addView(t);
-        }
-        if (!TextUtils.isEmpty(text)) {
-            TextView t = new TextView(this);
-            t.setText(text);
-            t.setTextColor(0xE6FFFFFF);
-            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-            t.setMaxLines(2);
-            t.setEllipsize(TextUtils.TruncateAt.END);
-            t.setPadding(0, dp(2), 0, 0);
-            card.addView(t);
-        }
-        final PendingIntent pi = nf.contentIntent;
-        card.setOnClickListener(v -> unlock(pi));
-        return card;
+            @Override
+            public void onWantsKeyboard(boolean want) {
+                replying = want;
+                if (!want && refreshPending) {
+                    refreshPending = false;
+                    refreshNotifications();
+                }
+            }
+        });
     }
 
     // ---------- akcje ----------
