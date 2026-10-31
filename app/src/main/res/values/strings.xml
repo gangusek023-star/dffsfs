@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_desc">TurboClean automatycznie otwiera ustawienia kolejnych aplikacji i naciska „Wyczyść pamięć podręczną”, tylko gdy sam uruchomisz szybkie czyszczenie. Usługa nie zbiera ani nie wysyła żadnych danych.</string>
+</resources>
