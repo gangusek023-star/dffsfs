@@ -48,7 +48,9 @@ public class IslandView extends FrameLayout {
 
     private final float density;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final GradientDrawable bg = new GradientDrawable();
+    private final Paint pillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF pill = new RectF();
+    private float curW, curH;
     private Listener listener;
     private int state = S_IDLE;
     private ValueAnimator sizeAnim;
@@ -94,11 +96,21 @@ public class IslandView extends FrameLayout {
     public IslandView(Context c) {
         super(c);
         density = c.getResources().getDisplayMetrics().density;
-        bg.setColor(Color.BLACK);
-        bg.setCornerRadius(dp(18));
-        setBackground(bg);
+        // Pigułka jest rysowana w stałym kontenerze – animacja zmienia tylko
+        // prostokąt rysowania i obrys, bez przeliczania układu ekranu.
+        curW = dp(120);
+        curH = dp(35);
+        pillPaint.setColor(Color.BLACK);
+        setWillNotDraw(false);
         setClipToOutline(true);
-        setOutlineProvider(ViewOutlineProvider.BACKGROUND);
+        setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                updatePill();
+                outline.setRoundRect(Math.round(pill.left), Math.round(pill.top),
+                        Math.round(pill.right), Math.round(pill.bottom), radius());
+            }
+        });
         setElevation(dp(4));
 
         setOnClickListener(v -> {
@@ -139,7 +151,7 @@ public class IslandView extends FrameLayout {
         compact.addView(compactRight, new LinearLayout.LayoutParams(-2, -2));
         compactEq = new EqualizerView(c);
         compact.addView(compactEq, new LinearLayout.LayoutParams(dp(20), dp(14)));
-        addView(compact, new LayoutParams(-1, -1));
+        addView(compact, new LayoutParams(dp(120), dp(35), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
         // ---- panel informacji ----
         infoPanel = new LinearLayout(c);
@@ -309,8 +321,9 @@ public class IslandView extends FrameLayout {
         compactRight.setTextColor(0xFF30D158);
         compactRight.setText(battery >= 0 ? battery + "%" : "");
         compactEq.setVisibility(GONE);
-        compact.animate().alpha(1f).setDuration(200).start();
         int w = Math.min(getResources().getDisplayMetrics().widthPixels - dp(48), dp(330));
+        setCompactSize(w, dp(38));
+        compact.animate().alpha(1f).setStartDelay(120).setDuration(200).start();
         animateSize(w, dp(38));
         handler.removeCallbacks(bannerEnd);
         handler.postDelayed(bannerEnd, 2800);
@@ -320,7 +333,7 @@ public class IslandView extends FrameLayout {
         handler.removeCallbacks(bannerEnd);
         boolean was = state == S_EXPANDED;
         state = S_EXPANDED;
-        compact.animate().alpha(0f).setDuration(90).start();
+        compact.animate().alpha(0f).setStartDelay(0).setDuration(90).start();
         showPanel(music);
         if (!was && listener != null) listener.onExpandChanged(true);
     }
@@ -328,10 +341,10 @@ public class IslandView extends FrameLayout {
     public void collapse() {
         if (state != S_EXPANDED) return;
         state = S_IDLE;
-        infoPanel.animate().alpha(0f).setDuration(90).withEndAction(() -> {
+        infoPanel.animate().alpha(0f).setStartDelay(0).setDuration(90).withEndAction(() -> {
             if (state != S_EXPANDED) infoPanel.setVisibility(GONE);
         }).start();
-        musicPanel.animate().alpha(0f).setDuration(90).withEndAction(() -> {
+        musicPanel.animate().alpha(0f).setStartDelay(0).setDuration(90).withEndAction(() -> {
             if (state != S_EXPANDED) musicPanel.setVisibility(GONE);
         }).start();
         updateCompact();
@@ -367,6 +380,7 @@ public class IslandView extends FrameLayout {
             compactEq.setVisibility(VISIBLE);
             compactEq.setColor(accent);
             compactEq.setPlaying(true);
+            setCompactSize(dp(200), idleH());
             compact.animate().alpha(1f).setStartDelay(150).setDuration(200).start();
             animateSize(dp(200), idleH());
         } else {
@@ -382,25 +396,59 @@ public class IslandView extends FrameLayout {
         return Math.min(getResources().getDisplayMetrics().widthPixels - dp(16), dp(420));
     }
 
-    private void animateSize(int w, int h) {
-        final ViewGroup.LayoutParams lp = getLayoutParams();
-        if (lp == null) {
-            post(() -> animateSize(w, h));
-            return;
+    /** Stały rozmiar kontenera – największa możliwa wyspa. */
+    public int containerW() { return expandedWidth() + dp(8); }
+
+    public int containerH() { return dp(250); }
+
+    private float radius() {
+        return Math.min(curH / 2f, dp(42));
+    }
+
+    private void updatePill() {
+        float l = (getWidth() - curW) / 2f;
+        pill.set(l, 0, l + curW, curH);
+    }
+
+    private void setCompactSize(int w, int h) {
+        LayoutParams lp = (LayoutParams) compact.getLayoutParams();
+        if (lp.width != w || lp.height != h) {
+            lp.width = w;
+            lp.height = h;
+            compact.setLayoutParams(lp);
         }
+    }
+
+    @Override
+    protected void dispatchDraw(Canvas c) {
+        updatePill();
+        float r = radius();
+        c.drawRoundRect(pill, r, r, pillPaint);
+        super.dispatchDraw(c);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent e) {
+        if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+            updatePill();
+            if (!pill.contains(e.getX(), e.getY())) return false;
+        }
+        return super.dispatchTouchEvent(e);
+    }
+
+    private void animateSize(int w, int h) {
         if (sizeAnim != null) sizeAnim.cancel();
-        final int sw = lp.width > 0 ? lp.width : getWidth();
-        final int sh = lp.height > 0 ? lp.height : getHeight();
+        final float sw = curW, sh = curH;
         if (sw == w && sh == h) return;
         sizeAnim = ValueAnimator.ofFloat(0f, 1f);
-        sizeAnim.setDuration(460);
-        sizeAnim.setInterpolator(new OvershootInterpolator(1.1f));
+        sizeAnim.setDuration(480);
+        sizeAnim.setInterpolator(new OvershootInterpolator(1.15f));
         sizeAnim.addUpdateListener(a -> {
             float t = (float) a.getAnimatedValue();
-            lp.width = Math.max(dp(20), Math.round(sw + (w - sw) * t));
-            lp.height = Math.max(dp(20), Math.round(sh + (h - sh) * t));
-            bg.setCornerRadius(Math.min(lp.height / 2f, dp(42)));
-            setLayoutParams(lp);
+            curW = Math.max(dp(20), sw + (w - sw) * t);
+            curH = Math.max(dp(20), sh + (h - sh) * t);
+            invalidateOutline();
+            invalidate();
         });
         sizeAnim.start();
     }

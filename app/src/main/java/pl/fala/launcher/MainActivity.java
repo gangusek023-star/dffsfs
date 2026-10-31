@@ -84,6 +84,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -129,6 +131,19 @@ public class MainActivity extends Activity implements IslandView.Listener {
     private final List<Item> items = new ArrayList<>();
     private final Map<String, Integer> sectionPos = new HashMap<>();
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
+    private final ExecutorService iconPool = Executors.newFixedThreadPool(
+            Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() - 1)));
+    private final Map<String, Bitmap> iconCache = new ConcurrentHashMap<>();
+    private final Runnable reloadRunnable = this::loadApps;
+    private SharedPreferences usage;
+    private View suggestView;
+    private TextView widgetGreeting;
+    private TextView widgetAlarm;
+    private int lastBlur = -1;
+    private boolean layersOn = false;
+    private boolean thresholdBuzzed = false;
+    private final android.view.animation.Interpolator smooth =
+            new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f);
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private FrameLayout root;
@@ -185,9 +200,20 @@ public class MainActivity extends Activity implements IslandView.Listener {
                         | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
 
         prefs = getSharedPreferences("fala", MODE_PRIVATE);
+        usage = getSharedPreferences("fala_usage", MODE_PRIVATE);
         launcherApps = (LauncherApps) getSystemService(Context.LAUNCHER_APPS_SERVICE);
 
+        readWallpaperTint();
         buildUi();
+        if (Build.VERSION.SDK_INT >= 27) {
+            try {
+                android.app.WallpaperManager.getInstance(this).addOnColorsChangedListener((colors, which) -> {
+                    readWallpaperTint();
+                    invalidateTree(root);
+                }, main);
+            } catch (Exception ignored) {
+            }
+        }
         setContentView(root);
 
         root.setOnApplyWindowInsetsListener((v, ins) -> {
@@ -198,11 +224,11 @@ public class MainActivity extends Activity implements IslandView.Listener {
         });
 
         callback = new LauncherApps.Callback() {
-            @Override public void onPackageRemoved(String p, UserHandle u) { loadApps(); }
-            @Override public void onPackageAdded(String p, UserHandle u) { loadApps(); }
-            @Override public void onPackageChanged(String p, UserHandle u) { loadApps(); }
-            @Override public void onPackagesAvailable(String[] p, UserHandle u, boolean r) { loadApps(); }
-            @Override public void onPackagesUnavailable(String[] p, UserHandle u, boolean r) { loadApps(); }
+            @Override public void onPackageRemoved(String p, UserHandle u) { invalidatePkg(p); scheduleReload(); }
+            @Override public void onPackageAdded(String p, UserHandle u) { invalidatePkg(p); scheduleReload(); }
+            @Override public void onPackageChanged(String p, UserHandle u) { invalidatePkg(p); scheduleReload(); }
+            @Override public void onPackagesAvailable(String[] p, UserHandle u, boolean r) { for (String s : p) invalidatePkg(s); scheduleReload(); }
+            @Override public void onPackagesUnavailable(String[] p, UserHandle u, boolean r) { scheduleReload(); }
         };
         launcherApps.registerCallback(callback, main);
 
@@ -215,18 +241,14 @@ public class MainActivity extends Activity implements IslandView.Listener {
     protected void onResume() {
         super.onResume();
         setupMedia();
-        if (!drawerOpen) {
-            homeContent.setAlpha(0f);
-            homeContent.setScaleX(0.94f);
-            homeContent.setScaleY(0.94f);
-            homeContent.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(340)
-                    .setInterpolator(new DecelerateInterpolator(1.8f)).start();
-        }
+        updateWidgetTexts();
+        if (!drawerOpen) playEntrance();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
+        setLayers(false);
         if (drawerOpen || drawerP > 0) {
             if (drawerAnim != null) drawerAnim.cancel();
             drawerOpen = false;
@@ -262,9 +284,46 @@ public class MainActivity extends Activity implements IslandView.Listener {
         try { if (msm != null && sessionsListener != null) msm.removeOnActiveSessionsChangedListener(sessionsListener); } catch (Exception ignored) { }
         try { if (controller != null && controllerCallback != null) controller.unregisterCallback(controllerCallback); } catch (Exception ignored) { }
         exec.shutdownNow();
+        iconPool.shutdownNow();
     }
 
     // ---------- pomocnicze ----------
+
+    /** Bierze główny kolor tapety i przyciemnia go – szkło dopasowuje się do tapety. */
+    private void readWallpaperTint() {
+        int tint = 0xFF000000;
+        if (Build.VERSION.SDK_INT >= 27) {
+            try {
+                android.app.WallpaperColors wc = android.app.WallpaperManager.getInstance(this)
+                        .getWallpaperColors(android.app.WallpaperManager.FLAG_SYSTEM);
+                if (wc != null) {
+                    float[] hsv = new float[3];
+                    Color.colorToHSV(wc.getPrimaryColor().toArgb(), hsv);
+                    hsv[2] = Math.min(hsv[2], 0.35f);
+                    tint = Color.HSVToColor(hsv);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        GlassDrawable.tint = tint;
+    }
+
+    private static void invalidateTree(View v) {
+        v.invalidate();
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) invalidateTree(g.getChildAt(i));
+        }
+    }
+
+    /** Warstwy sprzętowe tylko na czas animacji – płynne przesuwanie bez przerysowywania. */
+    private void setLayers(boolean on) {
+        if (layersOn == on) return;
+        layersOn = on;
+        int t = on ? View.LAYER_TYPE_HARDWARE : View.LAYER_TYPE_NONE;
+        homeLayer.setLayerType(t, null);
+        drawer.setLayerType(t, null);
+    }
 
     private int dp(float v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
@@ -283,10 +342,10 @@ public class MainActivity extends Activity implements IslandView.Listener {
         v.setOnTouchListener((vv, e) -> {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) {
-                vv.animate().scaleX(0.86f).scaleY(0.86f).setDuration(110).start();
+                vv.animate().setStartDelay(0).scaleX(0.86f).scaleY(0.86f).setDuration(110).start();
             } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-                vv.animate().scaleX(1f).scaleY(1f).setDuration(220)
-                        .setInterpolator(new DecelerateInterpolator()).start();
+                vv.animate().setStartDelay(0).scaleX(1f).scaleY(1f).setDuration(320)
+                        .setInterpolator(new android.view.animation.OvershootInterpolator(2.2f)).start();
             }
             return false;
         });
@@ -356,8 +415,9 @@ public class MainActivity extends Activity implements IslandView.Listener {
 
         // ===== szuflada aplikacji =====
         drawer = new DrawerFrame(this);
+        int tc = GlassDrawable.tint & 0xFFFFFF;
         drawer.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xB3101014, 0x99101014, 0xCC0A0A0C}));
+                new int[]{0xB3000000 | tc, 0x99000000 | tc, 0xD9000000 | tc}));
         drawer.setVisibility(View.INVISIBLE);
         root.addView(drawer, new FrameLayout.LayoutParams(-1, -1));
 
@@ -370,12 +430,18 @@ public class MainActivity extends Activity implements IslandView.Listener {
         list.setOverScrollMode(View.OVER_SCROLL_NEVER);
         list.setCacheColorHint(Color.TRANSPARENT);
         adapter = new Adapter();
+        suggestView = buildSuggestHeader();
+        list.addHeaderView(suggestView, null, false);
         list.setAdapter(adapter);
-        list.setOnItemClickListener((p, v, pos, id) -> {
+        list.setOnItemClickListener((p, v, position, id) -> {
+            int pos = position - list.getHeaderViewsCount();
+            if (pos < 0 || pos >= items.size()) return;
             Item it = items.get(pos);
             if (it.app != null) launch(it.app, v);
         });
-        list.setOnItemLongClickListener((p, v, pos, id) -> {
+        list.setOnItemLongClickListener((p, v, position, id) -> {
+            int pos = position - list.getHeaderViewsCount();
+            if (pos < 0 || pos >= items.size()) return false;
             Item it = items.get(pos);
             if (it.app != null) {
                 showAppMenu(it.app);
@@ -413,7 +479,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
             @Override
             public void onLetter(String letter, float y) {
                 Integer pos = sectionPos.get(letter);
-                if (pos != null) list.setSelectionFromTop(pos, list.getPaddingTop());
+                if (pos != null) list.setSelectionFromTop(pos + list.getHeaderViewsCount(), list.getPaddingTop());
                 bubble.setText(letter);
                 bubble.setTranslationY(y - dp(34));
                 bubble.animate().cancel();
@@ -487,7 +553,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
 
         island = new IslandView(this);
         island.setListener(this);
-        root.addView(island, new FrameLayout.LayoutParams(island.idleW(), island.idleH(),
+        root.addView(island, new FrameLayout.LayoutParams(island.containerW(), island.containerH(),
                 Gravity.TOP | Gravity.CENTER_HORIZONTAL));
     }
 
@@ -500,6 +566,13 @@ public class MainActivity extends Activity implements IslandView.Listener {
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
+        widgetGreeting = new TextView(this);
+        widgetGreeting.setTextColor(0xCCFFFFFF);
+        widgetGreeting.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        widgetGreeting.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        widgetGreeting.setLetterSpacing(0.04f);
+        widgetGreeting.setPadding(dp(3), 0, 0, dp(2));
+        col.addView(widgetGreeting);
         TextClock time = new TextClock(this);
         time.setFormat24Hour("HH:mm");
         time.setFormat12Hour("h:mm");
@@ -518,6 +591,12 @@ public class MainActivity extends Activity implements IslandView.Listener {
         date.setPadding(dp(3), dp(4), 0, 0);
         date.setShadowLayer(dp(4), 0, dp(1), 0x40000000);
         col.addView(date);
+        widgetAlarm = new TextView(this);
+        widgetAlarm.setTextColor(0xB3FFFFFF);
+        widgetAlarm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        widgetAlarm.setPadding(dp(3), dp(6), 0, 0);
+        widgetAlarm.setVisibility(View.GONE);
+        col.addView(widgetAlarm);
         w.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
 
         LinearLayout bat = new LinearLayout(this);
@@ -546,9 +625,9 @@ public class MainActivity extends Activity implements IslandView.Listener {
         v.setOnTouchListener((vv, e) -> {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) {
-                vv.animate().scaleX(0.97f).scaleY(0.97f).setDuration(120).start();
+                vv.animate().setStartDelay(0).scaleX(0.97f).scaleY(0.97f).setDuration(120).start();
             } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-                vv.animate().scaleX(1f).scaleY(1f).setDuration(220).start();
+                vv.animate().setStartDelay(0).scaleX(1f).scaleY(1f).setDuration(220).start();
             }
             return false;
         });
@@ -635,11 +714,24 @@ public class MainActivity extends Activity implements IslandView.Listener {
         return b;
     }
 
+    private void invalidatePkg(String pkg) {
+        String prefix = pkg + "/";
+        for (String k : iconCache.keySet()) if (k.startsWith(prefix)) iconCache.remove(k);
+    }
+
+    /** Grupuje serię zdarzeń instalacji w jedno przeładowanie. */
+    private void scheduleReload() {
+        main.removeCallbacks(reloadRunnable);
+        main.postDelayed(reloadRunnable, 400);
+    }
+
     private void loadApps() {
+        if (exec.isShutdown()) return;
         exec.execute(() -> {
             List<App> out = new ArrayList<>();
-            int px = dp(58);
+            final int px = dp(56);
             UserManager um = (UserManager) getSystemService(Context.USER_SERVICE);
+            List<Callable<Void>> jobs = new ArrayList<>();
             for (UserHandle u : um.getUserProfiles()) {
                 List<LauncherActivityInfo> infos;
                 try {
@@ -650,7 +742,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
                 for (LauncherActivityInfo i : infos) {
                     ComponentName cn = i.getComponentName();
                     if (cn.getPackageName().equals(getPackageName())) continue;
-                    App a = new App();
+                    final App a = new App();
                     CharSequence l = i.getLabel();
                     a.label = l == null ? cn.getPackageName() : l.toString().trim();
                     a.norm = normalize(a.label).toLowerCase(Locale.ROOT);
@@ -658,13 +750,25 @@ public class MainActivity extends Activity implements IslandView.Listener {
                     a.component = cn;
                     a.user = u;
                     a.key = cn.flattenToString() + "#" + u.hashCode();
-                    try {
-                        a.icon = makeIcon(i, u, px);
-                    } catch (Exception e) {
-                        a.icon = null;
+                    a.icon = iconCache.get(a.key);
+                    if (a.icon == null) {
+                        jobs.add(() -> {
+                            try {
+                                a.icon = makeIcon(i, u, px);
+                                if (a.icon != null) iconCache.put(a.key, a.icon);
+                            } catch (Exception ignored) {
+                            }
+                            return null;
+                        });
                     }
                     out.add(a);
                 }
+            }
+            // Ikony renderowane równolegle; z pamięci podręcznej przy kolejnych przeładowaniach.
+            try {
+                if (!jobs.isEmpty()) iconPool.invokeAll(jobs);
+            } catch (InterruptedException e) {
+                return;
             }
             final Collator col = Collator.getInstance(new Locale("pl", "PL"));
             Collections.sort(out, (x, y) -> {
@@ -840,6 +944,115 @@ public class MainActivity extends Activity implements IslandView.Listener {
         return cell;
     }
 
+    // ---------- widget i animacje wejścia ----------
+
+    private void updateWidgetTexts() {
+        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        String g;
+        if (h < 5) g = "Dobranoc";
+        else if (h < 12) g = "Dzień dobry";
+        else if (h < 18) g = "Miłego popołudnia";
+        else g = "Dobry wieczór";
+        widgetGreeting.setText(g);
+
+        try {
+            android.app.AlarmManager am = (android.app.AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            android.app.AlarmManager.AlarmClockInfo info = am.getNextAlarmClock();
+            if (info != null) {
+                long t = info.getTriggerTime();
+                java.util.Calendar now = java.util.Calendar.getInstance();
+                java.util.Calendar at = java.util.Calendar.getInstance();
+                at.setTimeInMillis(t);
+                String time = android.text.format.DateFormat.getTimeFormat(this).format(new java.util.Date(t));
+                String day;
+                int diff = at.get(java.util.Calendar.DAY_OF_YEAR) - now.get(java.util.Calendar.DAY_OF_YEAR);
+                if (at.get(java.util.Calendar.YEAR) != now.get(java.util.Calendar.YEAR)) diff = 7;
+                if (diff == 0) day = "dziś";
+                else if (diff == 1) day = "jutro";
+                else day = new java.text.SimpleDateFormat("EEE", new Locale("pl", "PL")).format(new java.util.Date(t));
+                widgetAlarm.setText("⏰  Budzik " + day + " " + time);
+                widgetAlarm.setVisibility(View.VISIBLE);
+            } else {
+                widgetAlarm.setVisibility(View.GONE);
+            }
+        } catch (Exception e) {
+            widgetAlarm.setVisibility(View.GONE);
+        }
+    }
+
+    /** Kaskadowe wejście elementów (jak w iOS po powrocie na ekran główny). */
+    private void playEntrance() {
+        List<View> views = new ArrayList<>();
+        views.add(widget);
+        for (int i = 0; i < grid.getChildCount(); i++) views.add(grid.getChildAt(i));
+        views.add(searchPill);
+        views.add(dock);
+        int d = 0;
+        for (View v : views) {
+            v.animate().cancel();
+            v.setAlpha(0f);
+            v.setTranslationY(dp(22));
+            v.setScaleX(0.96f);
+            v.setScaleY(0.96f);
+            v.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
+                    .setStartDelay(d).setDuration(420).setInterpolator(smooth)
+                    .withLayer().start();
+            d += 28;
+        }
+    }
+
+    // ---------- propozycje ----------
+
+    private LinearLayout suggestCard;
+    private LinearLayout suggestRow;
+
+    private View buildSuggestHeader() {
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(0, 0, 0, dp(6));
+        suggestCard = new LinearLayout(this);
+        suggestCard.setOrientation(LinearLayout.VERTICAL);
+        suggestCard.setBackground(glass(26, 0.9f));
+        suggestCard.setPadding(dp(14), dp(12), dp(14), dp(14));
+        TextView label = new TextView(this);
+        label.setText("PROPOZYCJE");
+        label.setTextColor(0x99FFFFFF);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        label.setLetterSpacing(0.12f);
+        label.setPadding(dp(4), 0, 0, dp(10));
+        suggestCard.addView(label);
+        suggestRow = new LinearLayout(this);
+        suggestRow.setOrientation(LinearLayout.HORIZONTAL);
+        suggestCard.addView(suggestRow, new LinearLayout.LayoutParams(-1, -2));
+        suggestCard.setVisibility(View.GONE);
+        wrap.addView(suggestCard, new FrameLayout.LayoutParams(-1, -2));
+        return wrap;
+    }
+
+    private void rebuildSuggestions() {
+        if (suggestCard == null) return;
+        List<App> top = new ArrayList<>();
+        if (query.isEmpty()) {
+            Map<String, ?> all = usage.getAll();
+            List<App> used = new ArrayList<>();
+            for (App a : apps) {
+                Object c = all.get(a.key);
+                if (c instanceof Integer && (Integer) c > 0) used.add(a);
+            }
+            Collections.sort(used, (x, y) -> Integer.compare(
+                    usage.getInt(y.key, 0), usage.getInt(x.key, 0)));
+            for (int i = 0; i < used.size() && i < 4; i++) top.add(used.get(i));
+        }
+        suggestRow.removeAllViews();
+        if (top.isEmpty()) {
+            suggestCard.setVisibility(View.GONE);
+            return;
+        }
+        for (App a : top) suggestRow.addView(homeCell(a), new LinearLayout.LayoutParams(0, -2, 1f));
+        for (int i = top.size(); i < 4; i++) suggestRow.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        suggestCard.setVisibility(View.VISIBLE);
+    }
+
     // ---------- szuflada ----------
 
     private void rebuildDrawer() {
@@ -878,6 +1091,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
         }
         adapter.notifyDataSetChanged();
         alphabet.setLetters(new ArrayList<>(letters));
+        rebuildSuggestions();
     }
 
     private void setDrawerProgress(float p) {
@@ -892,22 +1106,52 @@ public class MainActivity extends Activity implements IslandView.Listener {
         homeLayer.setScaleY(1f - 0.07f * p);
         homeLayer.setVisibility(p >= 1f ? View.INVISIBLE : View.VISIBLE);
         if (Build.VERSION.SDK_INT >= 31) {
-            try {
-                getWindow().setBackgroundBlurRadius(Math.round(p * dp(40)));
-            } catch (Exception ignored) {
+            int blur = Math.round(p * dp(40));
+            // rozmycie zmieniamy tylko przy wyraźnej różnicy – mniej pracy dla kompozytora
+            if (lastBlur < 0 || Math.abs(blur - lastBlur) >= dp(2) || blur == 0) {
+                if (blur != lastBlur) {
+                    try {
+                        getWindow().setBackgroundBlurRadius(blur);
+                    } catch (Exception ignored) {
+                    }
+                    lastBlur = blur;
+                }
             }
         }
     }
 
     private void animateDrawer(boolean open) {
         if (drawerAnim != null) drawerAnim.cancel();
+        setLayers(true);
         drawerAnim = ValueAnimator.ofFloat(drawerP, open ? 1f : 0f);
-        drawerAnim.setDuration(open ? 340 : 280);
-        drawerAnim.setInterpolator(new DecelerateInterpolator(2f));
+        drawerAnim.setDuration(open ? 380 : 300);
+        drawerAnim.setInterpolator(smooth);
         drawerAnim.addUpdateListener(a -> setDrawerProgress((float) a.getAnimatedValue()));
+        drawerAnim.addListener(new android.animation.AnimatorListenerAdapter() {
+            boolean cancelled = false;
+
+            @Override
+            public void onAnimationCancel(android.animation.Animator animation) {
+                cancelled = true;
+            }
+
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                if (!cancelled) setLayers(false);
+            }
+        });
         drawerOpen = open;
         if (!open) resetSearch();
+        else rebuildSuggestions();
         drawerAnim.start();
+    }
+
+    /** Lekka wibracja w momencie, gdy puszczenie palca otworzy/zamknie szufladę. */
+    private void dragFeedback(boolean pastThreshold) {
+        if (pastThreshold && !thresholdBuzzed) {
+            root.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
+        }
+        thresholdBuzzed = pastThreshold;
     }
 
     private void openDrawerWithSearch() {
@@ -948,6 +1192,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
                 opts = ActivityOptions.makeScaleUpAnimation(v, 0, 0, v.getWidth(), v.getHeight()).toBundle();
             }
             launcherApps.startMainActivity(a.component, a.user, r, opts);
+            usage.edit().putInt(a.key, usage.getInt(a.key, 0) + 1).apply();
         } catch (Exception e) {
             Toast.makeText(this, "Nie można uruchomić: " + a.label, Toast.LENGTH_SHORT).show();
         }
@@ -1386,6 +1631,9 @@ public class MainActivity extends Activity implements IslandView.Listener {
                 if (mode == 1) {
                     if (drawerAnim != null) drawerAnim.cancel();
                     hideKeyboard();
+                    setLayers(true);
+                    thresholdBuzzed = false;
+                    rebuildSuggestions();
                 }
                 return true;
             }
@@ -1425,6 +1673,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
                     if (dragging && mode == 1) {
                         float dy = e.getY() - downY;
                         setDrawerProgress(-dy / (screenH() * 0.5f));
+                        dragFeedback(drawerP > 0.35f);
                     }
                     return true;
                 case MotionEvent.ACTION_UP:
@@ -1485,6 +1734,8 @@ public class MainActivity extends Activity implements IslandView.Listener {
                         dragging = true;
                         if (drawerAnim != null) drawerAnim.cancel();
                         hideKeyboard();
+                        setLayers(true);
+                        thresholdBuzzed = false;
                         return true;
                     }
                     return false;
@@ -1513,6 +1764,7 @@ public class MainActivity extends Activity implements IslandView.Listener {
                     if (dragging) {
                         float dy = e.getY() - downY;
                         setDrawerProgress(1f - dy / (screenH() * 0.5f));
+                        dragFeedback(drawerP < 0.65f);
                     }
                     return true;
                 case MotionEvent.ACTION_UP:

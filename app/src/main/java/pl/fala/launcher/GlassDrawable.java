@@ -1,6 +1,9 @@
 package pl.fala.launcher;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import java.util.Random;
 import android.graphics.ColorFilter;
 import android.graphics.LinearGradient;
 import android.graphics.Outline;
@@ -29,11 +32,33 @@ public class GlassDrawable extends Drawable {
     private final RectF r = new RectF();
     private final RectF ri = new RectF();
 
+    /** Odcień szkła z kolorów tapety (ustawiany przez aktywność). */
+    static volatile int tint = 0xFF000000;
+    private static BitmapShader noiseShader;
+    private final Paint noise = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    /** Drobne ziarno jak w matowym szkle – generowane raz, współdzielone. */
+    private static synchronized BitmapShader noise() {
+        if (noiseShader == null) {
+            int s = 64;
+            int[] px = new int[s * s];
+            Random rnd = new Random(7);
+            for (int i = 0; i < px.length; i++) {
+                int a = rnd.nextInt(26);
+                px[i] = rnd.nextBoolean() ? (a << 24) | 0xFFFFFF : (a << 24);
+            }
+            Bitmap b = Bitmap.createBitmap(px, s, s, Bitmap.Config.ARGB_8888);
+            noiseShader = new BitmapShader(b, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+        }
+        return noiseShader;
+    }
+
     public GlassDrawable(float density, float radiusPx, float strength) {
         this.density = density;
         this.radius = radiusPx;
         this.strength = strength;
-        base.setColor(((int) (0x22 * strength) << 24));
+        noise.setShader(noise());
+        noise.setAlpha(140);
         rim.setStyle(Paint.Style.STROKE);
         rim.setStrokeWidth(1.2f * density);
         inner.setStyle(Paint.Style.STROKE);
@@ -69,8 +94,11 @@ public class GlassDrawable extends Drawable {
     public void draw(Canvas c) {
         float rr = Math.min(radius, r.height() / 2f);
         float o = 1.6f * density;
+        int t = tint;
+        base.setColor((Math.min(255, (int) (0x2E * strength)) << 24) | (t & 0xFFFFFF));
         c.drawRoundRect(r, rr, rr, base);
         c.drawRoundRect(r, rr, rr, fill);
+        c.drawRoundRect(r, rr, rr, noise);
         c.drawRoundRect(r, rr, rr, shine);
         c.drawRoundRect(ri, Math.max(0, rr - o), Math.max(0, rr - o), inner);
         c.drawRoundRect(r, rr, rr, rim);
