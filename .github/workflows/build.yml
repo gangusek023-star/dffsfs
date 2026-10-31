@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,3 +25,13 @@ jobs:
         with:
           name: TurboCPU-apk
           path: app/build/outputs/apk/release/*.apk
+      - name: Opublikuj APK jako Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk TurboCPU.apk
+          gh release delete turbocpu-latest -y --cleanup-tag || true
+          gh release create turbocpu-latest TurboCPU.apk \
+            --target "${{ github.sha }}" \
+            --title "TurboCPU (najnowsza wersja)" \
+            --notes "Wymaga roota. Pobierz TurboCPU.apk i zainstaluj na telefonie."
