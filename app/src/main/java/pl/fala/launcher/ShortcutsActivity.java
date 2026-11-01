@@ -85,6 +85,25 @@ public class ShortcutsActivity extends Activity {
         } else super.onBackPressed();
     }
 
+    private boolean wasEditing;
+
+    /** Nowy ekran wsuwa się z prawej (edytor) albo z lewej (powrót do listy). */
+    private void slideIn() {
+        boolean forward = editing != null && !wasEditing;
+        boolean back = editing == null && wasEditing;
+        wasEditing = editing != null;
+        if (!forward && !back) return;
+        root.post(() -> {
+            if (root.getChildCount() == 0) return;
+            View c = root.getChildAt(root.getChildCount() - 1);
+            c.setAlpha(0f);
+            c.setTranslationX(forward ? dp(48) : -dp(36));
+            c.animate().alpha(1f).translationX(0f).setStartDelay(0).setDuration(300)
+                    .setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
+                    .withLayer().start();
+        });
+    }
+
     // ---------- ikona skrótu ----------
 
     /** Ikona: własne zdjęcie albo kolorowy kafelek z symbolem, w kształcie z „Wyglądu ikon”. */
@@ -125,6 +144,7 @@ public class ShortcutsActivity extends Activity {
     private void showList() {
         list = Shortcuts.load(this);
         root.removeAllViews();
+        slideIn();
         ScrollView sv = new ScrollView(this);
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
@@ -284,6 +304,7 @@ public class ShortcutsActivity extends Activity {
     private void renderEditor() {
         Shortcuts.Shortcut s = editing;
         root.removeAllViews();
+        slideIn();
         ScrollView sv = new ScrollView(this);
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);

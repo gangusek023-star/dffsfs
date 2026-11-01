@@ -448,14 +448,28 @@ public class HomeController implements HomeGrid.Listener {
             float x = pad + (i % 3) * (m + gap), y = pad + (i / 3) * (m + gap);
             cv.drawBitmap(minis.get(i), null, new RectF(x, y, x + m, y + m), p);
         }
-        return cell(null, b, it.name == null ? "Folder" : it.name, v -> openFolder(it), v -> {
+        return cell(null, b, it.name == null ? "Folder" : it.name, v -> openFolder(it, v), v -> {
             setEditing(true);
             return true;
         });
     }
 
     private void openFolder(HomeModel.Item it) {
+        openFolder(it, null);
+    }
+
+    private View folderCol;
+    private float folderPx = -1, folderPy = -1;
+
+    private void openFolder(HomeModel.Item it, View from) {
         closeFolder();
+        folderPx = folderPy = -1;
+        if (from != null && from.getWidth() > 0) {
+            int[] a = new int[2];
+            from.getLocationOnScreen(a);
+            folderPx = a[0] + from.getWidth() / 2f;
+            folderPy = a[1] + from.getHeight() / 2f;
+        }
         folderItem = it;
         FrameLayout f = new FrameLayout(act);
         f.setBackgroundColor(0x99000000);
@@ -504,11 +518,39 @@ public class HomeController implements HomeGrid.Listener {
         f.addView(col, clp);
         overlay.addView(f, new FrameLayout.LayoutParams(-1, -1));
         folderView = f;
+        folderCol = col;
         f.setAlpha(0f);
-        f.animate().alpha(1f).setDuration(200).start();
-        col.setScaleX(0.7f);
-        col.setScaleY(0.7f);
-        col.animate().scaleX(1f).scaleY(1f).setDuration(320).setInterpolator(new OvershootInterpolator(1.2f)).start();
+        f.animate().alpha(1f).setDuration(220).start();
+        col.setAlpha(0f);
+        col.setScaleX(0.3f);
+        col.setScaleY(0.3f);
+        col.post(() -> {
+            pivotTo(col);
+            col.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(380)
+                    .setInterpolator(new OvershootInterpolator(0.9f)).withLayer().start();
+            // ikony w folderze pojawiają się jedna po drugiej
+            for (int i = 0; i < grid.getChildCount(); i++) {
+                View c = grid.getChildAt(i);
+                c.setAlpha(0f);
+                c.setScaleX(0.6f);
+                c.setScaleY(0.6f);
+                c.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(90 + i * 22L).setDuration(260)
+                        .setInterpolator(new OvershootInterpolator(1.4f)).start();
+            }
+        });
+    }
+
+    /** Punkt zaczepienia animacji folderu = środek jego ikony na ekranie. */
+    private void pivotTo(View col) {
+        if (folderPx < 0) {
+            col.setPivotX(col.getWidth() / 2f);
+            col.setPivotY(col.getHeight() / 2f);
+            return;
+        }
+        int[] a = new int[2];
+        col.getLocationOnScreen(a);
+        col.setPivotX(folderPx - a[0]);
+        col.setPivotY(folderPy - a[1]);
     }
 
     private void folderAppMenu(HomeModel.Item folder, MainActivity.App a) {
@@ -551,7 +593,14 @@ public class HomeController implements HomeGrid.Listener {
             rebuild();
         }
         folderItem = null;
-        f.animate().alpha(0f).setDuration(160).withEndAction(() -> overlay.removeView(f)).start();
+        View col = folderCol;
+        folderCol = null;
+        if (col != null) {
+            pivotTo(col);
+            col.animate().scaleX(0.3f).scaleY(0.3f).alpha(0f).setStartDelay(0).setDuration(220)
+                    .setInterpolator(new android.view.animation.AccelerateInterpolator(1.5f)).withLayer().start();
+        }
+        f.animate().alpha(0f).setStartDelay(40).setDuration(200).withEndAction(() -> overlay.removeView(f)).start();
         return true;
     }
 

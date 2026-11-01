@@ -109,6 +109,27 @@ public class HomePager extends ViewGroup {
     }
 
     @Override
+    protected void onScrollChanged(int l, int t, int oldl, int oldt) {
+        super.onScrollChanged(l, t, oldl, oldt);
+        depth();
+    }
+
+    /** Strony lekko się oddalają i przygasają, gdy odjeżdżają na bok. */
+    private void depth() {
+        int w = getWidth();
+        if (w == 0) return;
+        float pos = getScrollX() / (float) w;
+        for (int i = 0; i < getChildCount(); i++) {
+            View c = getChildAt(i);
+            float off = Math.min(1f, Math.abs(i - pos));
+            float s = 1f - 0.08f * off;
+            c.setScaleX(s);
+            c.setScaleY(s);
+            c.setAlpha(1f - 0.55f * off);
+        }
+    }
+
+    @Override
     public void computeScroll() {
         if (scroller.computeScrollOffset()) {
             scrollTo(scroller.getCurrX(), 0);

@@ -1027,9 +1027,24 @@ public class MainActivity extends Activity {
     }
 
     /** Kaskadowe wejście elementów (jak w iOS po powrocie na ekran główny). */
+    private boolean entranceDone, backFromApp;
+
     private void playEntrance() {
-        List<View> views = new ArrayList<>();
         if (homeCtl.editing()) return;
+        if (entranceDone) {
+            // powrót z aplikacji: cały ekran delikatnie „przybliża się” na miejsce, jak w iOS
+            if (!backFromApp) return;
+            backFromApp = false;
+            homeContent.animate().cancel();
+            homeContent.setScaleX(1.07f);
+            homeContent.setScaleY(1.07f);
+            homeContent.setAlpha(0.3f);
+            homeContent.animate().scaleX(1f).scaleY(1f).alpha(1f).setStartDelay(0).setDuration(340)
+                    .setInterpolator(smooth).withLayer().start();
+            return;
+        }
+        entranceDone = true;
+        List<View> views = new ArrayList<>();
         views.addAll(homeCtl.entranceViews());
         views.add(dock);
         int d = 0;
@@ -1234,9 +1249,10 @@ public class MainActivity extends Activity {
                 int[] loc = new int[2];
                 v.getLocationOnScreen(loc);
                 r = new Rect(loc[0], loc[1], loc[0] + v.getWidth(), loc[1] + v.getHeight());
-                opts = ActivityOptions.makeScaleUpAnimation(v, 0, 0, v.getWidth(), v.getHeight()).toBundle();
+                opts = ActivityOptions.makeClipRevealAnimation(v, 0, 0, v.getWidth(), v.getHeight()).toBundle();
             }
             launcherApps.startMainActivity(a.component, a.user, r, opts);
+            backFromApp = true;
             IslandService gs = IslandService.instance;
             if (gs != null && gs.game != null) gs.game.onLaunched(a.component.getPackageName());
             usage.edit().putInt(a.key, usage.getInt(a.key, 0) + 1).apply();
@@ -1856,6 +1872,7 @@ public class MainActivity extends Activity {
     }
 
     private void showGlassDialog(AlertDialog dlg) {
+        if (dlg.getWindow() != null) dlg.getWindow().setWindowAnimations(R.style.FalaDialogAnim);
         dlg.show();
         if (dlg.getWindow() != null) dlg.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
     }
@@ -2102,7 +2119,13 @@ public class MainActivity extends Activity {
                 r.run();
             });
             box.addView(row);
+            // pozycje menu wjeżdżają kaskadowo
+            row.setAlpha(0f);
+            row.setTranslationY(dp(10));
+            row.animate().alpha(1f).translationY(0f).setStartDelay(60 + i * 18L).setDuration(240)
+                    .setInterpolator(smooth).start();
         }
+        if (dlg.getWindow() != null) dlg.getWindow().setWindowAnimations(R.style.FalaDialogAnim);
         dlg.show();
         if (dlg.getWindow() != null) {
             dlg.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));

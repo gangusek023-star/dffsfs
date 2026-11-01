@@ -100,7 +100,7 @@
             android:icon="@mipmap/ic_shortcuts"
             android:roundIcon="@mipmap/ic_shortcuts"
             android:taskAffinity="pl.fala.launcher.shortcuts"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:theme="@style/SubTheme"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
