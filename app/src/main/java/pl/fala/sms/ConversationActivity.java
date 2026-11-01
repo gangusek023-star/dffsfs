@@ -79,6 +79,11 @@ public class ConversationActivity extends Activity {
     private TextView sendBtn, counter, simChip;
     private ContentObserver observer;
     private final Runnable reload = this::load;
+    private static final int REQ_IMAGE = 21;
+    private Uri attached = null;
+    private LinearLayout attachBox;
+    private ImageView attachThumb;
+    private final java.util.Set<Long> showTime = new java.util.HashSet<>();
 
     private int dp(float v) {
         return Ui.dp(this, v);
@@ -328,7 +333,7 @@ public class ConversationActivity extends Activity {
         });
         list.setOnItemClickListener((p, v, pos, id) -> {
             Msg m = msgs.get(pos);
-            if (m.type == Telephony.Sms.MESSAGE_TYPE_FAILED && !m.mms) retry(m);
+            if (!m.header) onBubbleTap(m);
         });
         rootCol.addView(list, new LinearLayout.LayoutParams(-1, 0, 1f));
 
@@ -354,8 +359,45 @@ public class ConversationActivity extends Activity {
             composer.addView(simChip, slp);
             updateSim();
         }
+        // podgląd załączonego zdjęcia
+        attachBox = new LinearLayout(this);
+        attachBox.setGravity(Gravity.CENTER_VERTICAL);
+        attachBox.setVisibility(View.GONE);
+        attachBox.setPadding(dp(52), 0, 0, dp(8));
+        FrameLayout thumbWrap = new FrameLayout(this);
+        attachThumb = new ImageView(this);
+        attachThumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        attachThumb.setClipToOutline(true);
+        attachThumb.setBackground(Ui.round(0xFF26262E, dp(14)));
+        thumbWrap.addView(attachThumb, new FrameLayout.LayoutParams(dp(84), dp(84)));
+        TextView rm = Ui.tv(this, "✕", 13, Color.WHITE, true);
+        rm.setGravity(Gravity.CENTER);
+        GradientDrawable rg = new GradientDrawable();
+        rg.setShape(GradientDrawable.OVAL);
+        rg.setColor(0xCC000000);
+        rm.setBackground(rg);
+        rm.setOnClickListener(v -> setAttachment(null));
+        FrameLayout.LayoutParams rmlp = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP | Gravity.END);
+        rmlp.topMargin = dp(4);
+        rmlp.rightMargin = dp(4);
+        thumbWrap.addView(rm, rmlp);
+        attachBox.addView(thumbWrap);
+        composer.addView(attachBox);
+
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.BOTTOM);
+        TextView plus = Ui.tv(this, "+", 26, Color.WHITE, false);
+        plus.setGravity(Gravity.CENTER);
+        plus.setPadding(0, 0, 0, dp(3));
+        GradientDrawable pgp = new GradientDrawable();
+        pgp.setShape(GradientDrawable.OVAL);
+        pgp.setColor(0xFF26262E);
+        plus.setBackground(pgp);
+        plus.setOnClickListener(v -> pickImage());
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(44), dp(44));
+        plp.rightMargin = dp(8);
+        plp.bottomMargin = dp(1);
+        row.addView(plus, plp);
         LinearLayout pill = new LinearLayout(this);
         pill.setOrientation(LinearLayout.VERTICAL);
         GradientDrawable pg = Ui.round(0xFF1C1C24, dp(22));
@@ -397,7 +439,7 @@ public class ConversationActivity extends Activity {
 
             @Override
             public void afterTextChanged(Editable s) {
-                boolean has = s.toString().trim().length() > 0;
+                boolean has = s.toString().trim().length() > 0 || attached != null;
                 sendBtn.animate().alpha(has ? 1f : 0.35f).scaleX(has ? 1f : 0.9f).scaleY(has ? 1f : 0.9f).setDuration(150).start();
                 if (has) {
                     int[] l = SmsMessage.calculateLength(s, false);
@@ -433,17 +475,138 @@ public class ConversationActivity extends Activity {
 
     private void send() {
         String text = input.getText().toString().trim();
-        if (text.isEmpty() || address == null) return;
+        if ((text.isEmpty() && attached == null) || address == null) return;
         if (!Sms.isDefault(this)) {
             Toast.makeText(this, "Ustaw Falę jako domyślną aplikację SMS", Toast.LENGTH_LONG).show();
             return;
         }
         input.setText("");
         final int sub = subId;
+        final Uri img = attached;
+        setAttachment(null);
         exec.execute(() -> {
-            Sms.send(this, address, text, sub);
+            if (img != null) {
+                try {
+                    Mms.send(this, address, text, img, sub);
+                } catch (Exception e) {
+                    main.post(() -> Toast.makeText(this, "Nie udało się przygotować zdjęcia", Toast.LENGTH_SHORT).show());
+                }
+            } else {
+                Sms.send(this, address, text, sub);
+            }
             if (threadId < 0) threadId = Sms.threadId(this, address);
             main.post(this::load);
+        });
+    }
+
+    private void pickImage() {
+        Intent i;
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            i = new Intent(android.provider.MediaStore.ACTION_PICK_IMAGES);
+        } else {
+            i = new Intent(Intent.ACTION_GET_CONTENT);
+            i.setType("image/*");
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+        }
+        try {
+            startActivityForResult(i, REQ_IMAGE);
+        } catch (Exception e) {
+            Intent g = new Intent(Intent.ACTION_GET_CONTENT).setType("image/*");
+            try {
+                startActivityForResult(g, REQ_IMAGE);
+            } catch (Exception ignored) {
+                Toast.makeText(this, "Brak galerii", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_IMAGE && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            setAttachment(data.getData());
+        }
+    }
+
+    private void setAttachment(Uri u) {
+        attached = u;
+        if (attachBox == null) return;
+        if (u == null) {
+            attachBox.setVisibility(View.GONE);
+            attachThumb.setImageDrawable(null);
+            input.setHint("Wiadomość SMS");
+        } else {
+            attachBox.setVisibility(View.VISIBLE);
+            input.setHint("Dodaj podpis (MMS)");
+            exec.execute(() -> {
+                Bitmap b = decode(u, dp(120));
+                main.post(() -> attachThumb.setImageBitmap(b));
+            });
+        }
+        boolean has = input.getText().toString().trim().length() > 0 || attached != null;
+        sendBtn.animate().alpha(has ? 1f : 0.35f).scaleX(has ? 1f : 0.9f).scaleY(has ? 1f : 0.9f).setDuration(150).start();
+    }
+
+    /** Linki i numery z treści wiadomości. */
+    private static List<String> links(String body) {
+        List<String> out = new ArrayList<>();
+        if (body == null) return out;
+        android.text.SpannableString sp = new android.text.SpannableString(body);
+        android.text.util.Linkify.addLinks(sp, android.text.util.Linkify.WEB_URLS
+                | android.text.util.Linkify.PHONE_NUMBERS | android.text.util.Linkify.EMAIL_ADDRESSES);
+        for (android.text.style.URLSpan u : sp.getSpans(0, sp.length(), android.text.style.URLSpan.class)) out.add(u.getURL());
+        return out;
+    }
+
+    private void openLink(String url) {
+        try {
+            Intent i;
+            if (url.startsWith("tel:")) i = new Intent(Intent.ACTION_DIAL, Uri.parse(url));
+            else i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            startActivity(i);
+        } catch (Exception e) {
+            Toast.makeText(this, "Nie można otworzyć linku", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void onBubbleTap(Msg m) {
+        if (m.type == Telephony.Sms.MESSAGE_TYPE_FAILED && !m.mms) {
+            retry(m);
+            return;
+        }
+        List<String> l = links(m.body);
+        if (l.size() == 1) {
+            openLink(l.get(0));
+        } else if (l.size() > 1) {
+            String[] items = new String[l.size()];
+            for (int i = 0; i < l.size(); i++) items[i] = l.get(i).replaceFirst("^(https?://|tel:|mailto:)", "");
+            new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("Otwórz")
+                    .setItems(items, (d, w) -> openLink(l.get(w))).show();
+        } else {
+            if (!showTime.remove(m.id * 2 + (m.mms ? 1 : 0))) showTime.add(m.id * 2 + (m.mms ? 1 : 0));
+            adapter.notifyDataSetChanged();
+        }
+    }
+
+    /** Zdjęcie na pełnym ekranie. */
+    private void viewImage(Uri u) {
+        android.app.Dialog d = new android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        FrameLayout f = new FrameLayout(this);
+        f.setBackgroundColor(Color.BLACK);
+        ImageView iv = new ImageView(this);
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        f.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+        TextView x = Ui.tv(this, "✕", 22, Color.WHITE, true);
+        x.setPadding(dp(20), dp(20), dp(20), dp(20));
+        x.setOnClickListener(v -> d.dismiss());
+        f.addView(x, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
+        iv.setOnClickListener(v -> d.dismiss());
+        d.setContentView(f);
+        d.show();
+        exec.execute(() -> {
+            Bitmap b = decode(u, 2048);
+            main.post(() -> iv.setImageBitmap(b));
         });
     }
 
@@ -462,7 +625,7 @@ public class ConversationActivity extends Activity {
     }
 
     private void bubbleMenu(Msg m) {
-        String[] items = m.mms ? new String[]{"Kopiuj tekst"} : new String[]{"Kopiuj tekst", "Przekaż dalej", "Usuń"};
+        String[] items = new String[]{"Kopiuj tekst", "Przekaż dalej", "Usuń"};
         new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setItems(items, (d, w) -> {
                     if (w == 0) {
@@ -474,7 +637,8 @@ public class ConversationActivity extends Activity {
                     } else {
                         exec.execute(() -> {
                             try {
-                                getContentResolver().delete(Uri.withAppendedPath(Telephony.Sms.CONTENT_URI, String.valueOf(m.id)), null, null);
+                                Uri base = m.mms ? Uri.parse("content://mms") : Telephony.Sms.CONTENT_URI;
+                                getContentResolver().delete(Uri.withAppendedPath(base, String.valueOf(m.id)), null, null);
                             } catch (Exception ignored) {
                             }
                         });
@@ -532,7 +696,9 @@ public class ConversationActivity extends Activity {
                 m.mms = true;
                 m.id = c.getLong(0);
                 m.date = c.getLong(1) * 1000L;
-                m.type = c.getInt(2) == 1 ? 1 : 2;
+                int box = c.getInt(2);
+                m.type = box == 1 ? 1 : box == 4 ? Telephony.Sms.MESSAGE_TYPE_OUTBOX : box == 5 ? Telephony.Sms.MESSAGE_TYPE_FAILED : 2;
+                m.status = -1;
                 StringBuilder sb = new StringBuilder();
                 try (Cursor p = getContentResolver().query(Uri.parse("content://mms/part"),
                         new String[]{"_id", "ct", "text"}, "mid=?", new String[]{String.valueOf(m.id)}, null)) {
@@ -599,6 +765,8 @@ public class ConversationActivity extends Activity {
                 return t;
             }
             boolean mine = m.type != 1;
+            int lastMine = -1;
+            for (int k = msgs.size() - 1; k >= 0; k--) if (!msgs.get(k).header && msgs.get(k).type != 1) { lastMine = k; break; }
             LinearLayout row;
             if (cv instanceof LinearLayout) row = (LinearLayout) cv;
             else {
@@ -619,15 +787,20 @@ public class ConversationActivity extends Activity {
                 iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 iv.setClipToOutline(true);
                 iv.setBackground(Ui.round(0xFF2A2A33, dp(18)));
+                final Uri imgUri = m.image;
+                iv.setOnClickListener(v -> viewImage(imgUri));
+                iv.setOnLongClickListener(v -> { bubbleMenu(m); return true; });
                 row.addView(iv, new LinearLayout.LayoutParams(-2, -2));
             }
             if (m.body != null && !m.body.isEmpty()) {
-                TextView b = Ui.tv(ConversationActivity.this, m.body, 16, Color.WHITE, false);
+                // linki podkreślone; dotknięcie dymka je otwiera
+                android.text.SpannableString sp = new android.text.SpannableString(m.body);
+                android.text.util.Linkify.addLinks(sp, android.text.util.Linkify.WEB_URLS
+                        | android.text.util.Linkify.PHONE_NUMBERS | android.text.util.Linkify.EMAIL_ADDRESSES);
+                TextView b = Ui.tv(ConversationActivity.this, sp, 16, Color.WHITE, false);
                 b.setPadding(dp(14), dp(9), dp(14), dp(9));
                 b.setLineSpacing(dp(1), 1f);
-                b.setTextIsSelectable(false);
-                b.setAutoLinkMask(android.text.util.Linkify.WEB_URLS | android.text.util.Linkify.PHONE_NUMBERS);
-                b.setLinkTextColor(mine ? 0xFFE8EEFF : 0xFF8FB2FF);
+                b.setLinkTextColor(mine ? 0xFFFFFFFF : 0xFF8FB2FF);
                 GradientDrawable g;
                 if (mine) {
                     g = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
@@ -643,14 +816,36 @@ public class ConversationActivity extends Activity {
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
                 if (m.bitmap != null) lp.topMargin = dp(3);
                 row.addView(b, lp);
+                List<String> ls = links(m.body);
+                for (String u : ls) {
+                    if (!u.startsWith("http")) continue;
+                    String host = Uri.parse(u).getHost();
+                    if (host == null) continue;
+                    TextView chip = Ui.tv(ConversationActivity.this, "🔗  " + host.replaceFirst("^www\\.", "") + "  ›", 13, Color.WHITE, true);
+                    chip.setPadding(dp(12), dp(8), dp(12), dp(8));
+                    chip.setBackground(Ui.round(0xFF1E2230, dp(14)));
+                    chip.setOnClickListener(v -> openLink(u));
+                    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
+                    clp.topMargin = dp(4);
+                    row.addView(chip, clp);
+                    break;
+                }
+            }
+            if (showTime.contains(m.id * 2 + (m.mms ? 1 : 0))) {
+                TextView tt = Ui.tv(ConversationActivity.this, new java.text.SimpleDateFormat("d MMM, HH:mm", Ui.PL).format(new java.util.Date(m.date)), 11, Ui.TEXT2, false);
+                tt.setPadding(dp(4), dp(3), dp(4), 0);
+                row.addView(tt);
             }
             // status pod ostatnią wysłaną
-            if (mine && !nextSame && !m.mms) {
+            // status tylko pod ostatnią wysłaną wiadomością (błędy – zawsze)
+            boolean failed = m.type == Telephony.Sms.MESSAGE_TYPE_FAILED;
+            if (mine && (pos == lastMine || failed)) {
                 String st;
                 int col = Ui.TEXT2;
-                if (m.type == Telephony.Sms.MESSAGE_TYPE_FAILED) { st = "Nie wysłano · dotknij, aby ponowić"; col = 0xFFFF6B6B; }
+                if (failed) { st = m.mms ? "Nie wysłano" : "Nie wysłano · dotknij, aby ponowić"; col = 0xFFFF6B6B; }
                 else if (m.type == Telephony.Sms.MESSAGE_TYPE_OUTBOX || m.type == Telephony.Sms.MESSAGE_TYPE_QUEUED) st = "Wysyłanie…";
-                else if (m.status == Telephony.Sms.STATUS_COMPLETE) st = "Dostarczono";
+                else if (m.status == Telephony.Sms.STATUS_COMPLETE) st = "Dostarczono " + new java.text.SimpleDateFormat("HH:mm", Ui.PL).format(new java.util.Date(m.date));
+                else if (m.status == Telephony.Sms.STATUS_FAILED) { st = "Nie doręczono"; col = 0xFFFF6B6B; }
                 else st = "Wysłano";
                 TextView s = Ui.tv(ConversationActivity.this, st, 11, col, true);
                 s.setPadding(dp(4), dp(3), dp(4), 0);

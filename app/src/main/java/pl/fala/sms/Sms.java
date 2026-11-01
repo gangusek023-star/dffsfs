@@ -204,7 +204,8 @@ public final class Sms {
                 sent.add(PendingIntent.getBroadcast(c, req + i, si, pendingFlags(false)));
                 Intent di = new Intent(c, StatusReceiver.class).setAction(ACTION_DELIVERED);
                 if (uri != null) di.setData(uri);
-                deliv.add(PendingIntent.getBroadcast(c, req + 1000 + i, di, pendingFlags(false)));
+                // zmienny – system dołącza do niego raport doręczenia (pdu)
+                deliv.add(PendingIntent.getBroadcast(c, req + 1000 + i, di, pendingFlags(true)));
             }
             if (parts.size() > 1) sm.sendMultipartTextMessage(address, null, parts, sent, deliv);
             else sm.sendTextMessage(address, null, body, sent.get(0), deliv.get(0));
@@ -275,6 +276,10 @@ public final class Sms {
 
     /** Powiadomienie z ostatnimi nieprzeczytanymi wiadomościami rozmowy i szybką odpowiedzią. */
     static void notifyThread(Context c, long threadId, String address) {
+        notifyThread(c, threadId, address, null);
+    }
+
+    static void notifyThread(Context c, long threadId, String address, String extra) {
         ensureChannel(c);
         Contact k = contact(c, address);
         List<String[]> unread = new ArrayList<>();
@@ -285,6 +290,7 @@ public final class Sms {
             while (cur != null && cur.moveToNext()) unread.add(new String[]{cur.getString(0), String.valueOf(cur.getLong(1))});
         } catch (Exception ignored) {
         }
+        if (extra != null && !extra.isEmpty()) unread.add(new String[]{extra, String.valueOf(System.currentTimeMillis())});
         if (unread.isEmpty()) return;
         int from = Math.max(0, unread.size() - 6);
 
