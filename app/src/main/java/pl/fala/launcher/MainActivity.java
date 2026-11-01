@@ -180,6 +180,7 @@ public class MainActivity extends Activity {
 
     private IslandController islandCtl;
     private IconFactory icons;
+    private HomeController homeCtl;
     private android.view.DisplayCutout cutout;
     private static final int REQ_PICK_ICON = 41;
     private String pendingIconKey = null;
@@ -244,6 +245,8 @@ public class MainActivity extends Activity {
         if (gs != null && gs.game != null) gs.game.onHomeVisible();
         islandCtl.refresh();
         updateGlobalIsland();
+        // zmiany z aplikacji Skróty / przypięte skróty z innych aplikacji
+        if (!byKey.isEmpty() && !homeCtl.editing()) homeCtl.reload();
         updateWidgetTexts();
         if (!drawerOpen) playEntrance();
     }
@@ -266,10 +269,12 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         if (island.isExpanded()) island.collapse();
         if (drawerOpen) animateDrawer(false);
+        else homeCtl.onBack();
     }
 
     @Override
     public void onBackPressed() {
+        if (!drawerOpen && homeCtl.onBack()) return;
         if (island.isExpanded()) {
             island.collapse();
         } else if (drawerOpen) {
@@ -372,42 +377,33 @@ public class MainActivity extends Activity {
         homeContent.setOrientation(LinearLayout.VERTICAL);
         homeLayer.addView(homeContent, new FrameLayout.LayoutParams(-1, -1));
 
-        widget = buildWidget();
-        LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(-1, -2);
-        wlp.topMargin = dp(40);
-        wlp.leftMargin = dp(4);
-        wlp.rightMargin = dp(4);
-        homeContent.addView(widget, wlp);
-
         grid = new LinearLayout(this);
-        grid.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(-1, -2);
-        glp.topMargin = dp(28);
-        homeContent.addView(grid, glp);
-
-        homeContent.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1f));
-
         searchPill = new LinearLayout(this);
-        searchPill.setOrientation(LinearLayout.HORIZONTAL);
-        searchPill.setGravity(Gravity.CENTER);
-        searchPill.setBackground(glass(18, 1f));
-        searchPill.setPadding(dp(16), dp(8), dp(18), dp(8));
-        ImageView si = new ImageView(this);
-        si.setImageResource(R.drawable.ic_search);
-        searchPill.addView(si, new LinearLayout.LayoutParams(dp(16), dp(16)));
-        TextView st = new TextView(this);
-        st.setText("Szukaj");
-        st.setTextColor(Color.WHITE);
-        st.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        st.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        st.setPadding(dp(8), 0, 0, 0);
-        searchPill.addView(st);
-        searchPill.setOnClickListener(v -> openDrawerWithSearch());
-        pressEffect(searchPill);
-        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-2, -2);
-        plp.gravity = Gravity.CENTER_HORIZONTAL;
-        plp.bottomMargin = dp(16);
-        homeContent.addView(searchPill, plp);
+        homeCtl = new HomeController(this, new HomeController.Host() {
+            @Override public App app(String key) { return byKey.get(key); }
+            @Override public void launch(App a, View v) { MainActivity.this.launch(a, v); }
+            @Override public void appMenu(App a) { showAppMenu(a); }
+            @Override public View clockWidget() {
+                widget = buildWidget();
+                if (batteryLevel >= 0) {
+                    widgetRing.setBattery(batteryLevel, charging);
+                    widgetBattery.setText(charging ? "Ładowanie" : "Bateria");
+                }
+                main.post(MainActivity.this::updateWidgetTexts);
+                return widget;
+            }
+            @Override public void pickImage(int req) {
+                Intent i = new Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE);
+                try { startActivityForResult(Intent.createChooser(i, "Wybierz zdjęcie"), req); } catch (Exception ignored) { }
+            }
+            @Override public void showSettings() { MainActivity.this.showSettings(); }
+            @Override public void openSearch() { openDrawerWithSearch(); }
+            @Override public IconFactory icons() { return icons; }
+            @Override public void onEditChanged(boolean editing) { }
+        }, prefs, root);
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, 0, 1f);
+        hlp.topMargin = dp(36);
+        homeContent.addView(homeCtl.view(), hlp);
 
         dock = new LinearLayout(this);
         dock.setOrientation(LinearLayout.HORIZONTAL);
@@ -769,7 +765,7 @@ public class MainActivity extends Activity {
                 }
                 for (LauncherActivityInfo i : infos) {
                     ComponentName cn = i.getComponentName();
-                    if (cn.getPackageName().equals(getPackageName())) continue;
+                    if (cn.getPackageName().equals(getPackageName()) && cn.getClassName().endsWith(".MainActivity")) continue;
                     final App a = new App();
                     CharSequence l = i.getLabel();
                     a.label = l == null ? cn.getPackageName() : l.toString().trim();
@@ -884,40 +880,8 @@ public class MainActivity extends Activity {
     // ---------- ekran główny ----------
 
     private void rebuildHome() {
-        grid.removeAllViews();
-        List<App> home = new ArrayList<>();
-        for (String k : getList("home")) {
-            App a = byKey.get(k);
-            if (a != null) home.add(a);
-        }
-        if (home.isEmpty()) {
-            TextView hint = new TextView(this);
-            hint.setText("Przesuń w górę, aby zobaczyć wszystkie aplikacje.\nPrzytrzymaj aplikację, aby dodać ją tutaj.");
-            hint.setTextColor(0xE6FFFFFF);
-            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-            hint.setGravity(Gravity.CENTER);
-            hint.setLineSpacing(dp(3), 1f);
-            hint.setBackground(glass(24, 0.9f));
-            hint.setPadding(dp(18), dp(16), dp(18), dp(16));
-            grid.addView(hint, new LinearLayout.LayoutParams(-1, -2));
-        } else {
-            int cols = 4;
-            LinearLayout row = null;
-            for (int i = 0; i < home.size() && i < 24; i++) {
-                if (i % cols == 0) {
-                    row = new LinearLayout(this);
-                    row.setOrientation(LinearLayout.HORIZONTAL);
-                    LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-                    rlp.bottomMargin = dp(18);
-                    grid.addView(row, rlp);
-                }
-                row.addView(homeCell(home.get(i)), new LinearLayout.LayoutParams(0, -2, 1f));
-            }
-            int rest = home.size() % cols;
-            if (rest != 0 && row != null) {
-                for (int i = rest; i < cols; i++) row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
-            }
-        }
+        homeCtl.migrateIfFresh();
+        homeCtl.rebuild();
 
         dock.removeAllViews();
         List<String> dockKeys = getList("dock");
@@ -981,6 +945,7 @@ public class MainActivity extends Activity {
     // ---------- widget i animacje wejścia ----------
 
     private void updateWidgetTexts() {
+        if (widgetGreeting == null || widgetAlarm == null) return;
         int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         String g;
         if (h < 5) g = "Dobranoc";
@@ -1017,9 +982,8 @@ public class MainActivity extends Activity {
     /** Kaskadowe wejście elementów (jak w iOS po powrocie na ekran główny). */
     private void playEntrance() {
         List<View> views = new ArrayList<>();
-        views.add(widget);
-        for (int i = 0; i < grid.getChildCount(); i++) views.add(grid.getChildAt(i));
-        views.add(searchPill);
+        if (homeCtl.editing()) return;
+        views.addAll(homeCtl.entranceViews());
         views.add(dock);
         int d = 0;
         for (View v : views) {
@@ -1271,37 +1235,35 @@ public class MainActivity extends Activity {
         final int hi = home.indexOf(a.key);
         final int di = dockKeys.indexOf(a.key);
 
-        if (hi < 0) {
-            labels.add("＋  Dodaj do ekranu głównego");
+        // skróty aplikacji (np. konkretny czat) – na górze menu
+        for (android.content.pm.ShortcutInfo si : homeCtl.shortcutsFor(a)) {
+            CharSequence sl = si.getShortLabel();
+            labels.add("↗  " + (sl == null ? si.getId() : sl));
+            actions.add(() -> homeCtl.startAppShortcut(si));
+        }
+        List<android.content.pm.ShortcutInfo> scs = homeCtl.shortcutsFor(a);
+        if (!scs.isEmpty()) {
+            labels.add("📌  Przypnij skrót aplikacji na ekran");
             actions.add(() -> {
-                home.add(a.key);
-                saveList("home", home);
-                rebuildHome();
+                String[] names = new String[scs.size()];
+                for (int i = 0; i < names.length; i++) {
+                    CharSequence sl = scs.get(i).getShortLabel();
+                    names[i] = sl == null ? scs.get(i).getId() : sl.toString();
+                }
+                new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setTitle("Który skrót?")
+                        .setItems(names, (dd, w) -> homeCtl.pinAppShortcut(scs.get(w))).show();
             });
+        }
+        if (!homeCtl.hasApp(a.key)) {
+            labels.add("＋  Dodaj do ekranu głównego");
+            actions.add(() -> homeCtl.addApp(a.key));
         } else {
             labels.add("－  Usuń z ekranu głównego");
-            actions.add(() -> {
-                home.remove(a.key);
-                saveList("home", home);
-                rebuildHome();
-            });
-            if (hi > 0) {
-                labels.add("←  Przesuń wcześniej");
-                actions.add(() -> {
-                    Collections.swap(home, hi, hi - 1);
-                    saveList("home", home);
-                    rebuildHome();
-                });
-            }
-            if (hi < home.size() - 1) {
-                labels.add("→  Przesuń dalej");
-                actions.add(() -> {
-                    Collections.swap(home, hi, hi + 1);
-                    saveList("home", home);
-                    rebuildHome();
-                });
-            }
+            actions.add(() -> homeCtl.removeApp(a.key));
         }
+        labels.add("✏️  Edytuj ekran główny");
+        actions.add(() -> { if (drawerOpen) animateDrawer(false); homeCtl.setEditing(true); });
         if (di < 0) {
             if (dockKeys.size() < 5) {
                 labels.add("▁  Dodaj do docka");
@@ -1793,6 +1755,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (homeCtl.onActivityResult(requestCode, resultCode, data)) return;
         if (requestCode != REQ_PICK_ICON || resultCode != RESULT_OK || data == null || data.getData() == null
                 || pendingIconKey == null) return;
         final Uri uri = data.getData();
@@ -2027,6 +1990,10 @@ public class MainActivity extends Activity {
         actions.add(this::showSetup);
         labels.add("🎮  Tryb Ultra Gry");
         actions.add(this::showGameSettings);
+        labels.add("⚡  Skróty");
+        actions.add(() -> safeStart(new Intent(this, ShortcutsActivity.class)));
+        labels.add("✏️  Edytuj ekran główny");
+        actions.add(() -> homeCtl.setEditing(true));
         labels.add("✦  Zapytaj Falę (asystent)");
         actions.add(this::openAssistant);
         labels.add("✦  Asystent: klucz API i głos");
@@ -2108,8 +2075,8 @@ public class MainActivity extends Activity {
                     batteryLevel = (lvl >= 0 && scale > 0) ? lvl * 100 / scale : -1;
                     charging = status == BatteryManager.BATTERY_STATUS_CHARGING
                             || status == BatteryManager.BATTERY_STATUS_FULL;
-                    widgetRing.setBattery(batteryLevel, charging);
-                    widgetBattery.setText(charging ? "Ładowanie" : "Bateria");
+                    if (widgetRing != null) widgetRing.setBattery(batteryLevel, charging);
+                    if (widgetBattery != null) widgetBattery.setText(charging ? "Ładowanie" : "Bateria");
                 }
             }
         };
@@ -2149,10 +2116,7 @@ public class MainActivity extends Activity {
 
                 @Override
                 public void onLongPress(MotionEvent e) {
-                    if (!dragging) {
-                        performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-                        showSettings();
-                    }
+                    if (!dragging && !homeCtl.editing()) homeCtl.setEditing(true);
                 }
             });
         }
@@ -2191,6 +2155,7 @@ public class MainActivity extends Activity {
                     mode = 0;
                     return false;
                 case MotionEvent.ACTION_MOVE:
+                    if (homeCtl.editing()) return false;
                     return !dragging && checkStart(e);
                 default:
                     return false;

@@ -93,6 +93,32 @@
         </activity>
 
         <activity
+            android:name=".ShortcutsActivity"
+            android:exported="true"
+            android:label="Skróty"
+            android:icon="@mipmap/ic_shortcuts"
+            android:roundIcon="@mipmap/ic_shortcuts"
+            android:taskAffinity="pl.fala.launcher.shortcuts"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".PinShortcutActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.content.pm.action.CONFIRM_PIN_SHORTCUT" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".LockActivity"
             android:exported="false"
             android:showWhenLocked="true"
