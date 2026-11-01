@@ -45,7 +45,12 @@ import java.util.Map;
 public class IconFactory {
 
     public static final String[] SHAPES = {"iOS", "Koło", "Kropla", "Kwadrat"};
-    public static final String[] STYLES = {"Kolorowe", "Szklane", "Ciemne"};
+    public static final String[] STYLES = {"Kolorowe", "Szklane", "Ciemne", "Tapeta"};
+    public static final String[] TONES = {"Auto", "Jasne", "Ciemne"};
+
+    /** Kolory z aktualnej tapety (ustawiane przez ekran główny). */
+    static volatile int wallPrimary = 0xFF6750A4;
+    static volatile int wallSecondary = 0;
     public static final String[] SIZES = {"Małe", "Średnie", "Duże"};
 
     private final Context ctx;
@@ -68,6 +73,56 @@ public class IconFactory {
     public int style() { return prefs.getInt("icon_style", 0); }
 
     public int size() { return prefs.getInt("icon_size", 1); }
+
+    public int tone() { return prefs.getInt("icon_tone", 0); }
+
+    /** Czy wygląd ikon zależy od tapety (trzeba je przerysować po jej zmianie). */
+    public boolean dependsOnWallpaper() {
+        int st = style();
+        return st == 1 || st == 3;
+    }
+
+    /**
+     * Paleta "Tapeta": {góra tła, dół tła, kolor symbolu, jasna?}.
+     * Jasne tło z ciemnym symbolem albo ciemne tło z jasnym – w odcieniu tapety.
+     */
+    private int[] wallPalette() {
+        float[] hsv = new float[3];
+        Color.colorToHSV(wallPrimary, hsv);
+        float h = hsv[0], s = hsv[1];
+        float[] hsv2 = new float[3];
+        int sec = wallSecondary;
+        float gh = h;
+        if (sec != 0) {
+            Color.colorToHSV(sec, hsv2);
+            if (hsv2[1] > 0.12f) gh = hsv2[0];
+        }
+        boolean gray = s < 0.1f;
+        int t = tone();
+        boolean light = t == 1 || (t == 0 && Color.luminance(wallPrimary) > 0.42f);
+        int top, bottom, glyph;
+        if (light) {
+            top = Color.HSVToColor(new float[]{h, gray ? 0.02f : 0.16f, 0.98f});
+            bottom = Color.HSVToColor(new float[]{h, gray ? 0.03f : 0.26f, 0.90f});
+            glyph = Color.HSVToColor(new float[]{gh, gray ? 0.05f : Math.max(0.55f, s), 0.36f});
+        } else {
+            top = Color.HSVToColor(new float[]{h, gray ? 0.04f : 0.45f, 0.27f});
+            bottom = Color.HSVToColor(new float[]{h, gray ? 0.05f : 0.55f, 0.14f});
+            glyph = Color.HSVToColor(new float[]{gh, gray ? 0.05f : 0.33f, 0.96f});
+        }
+        return new int[]{top, bottom, glyph, light ? 1 : 0};
+    }
+
+    /** Zamienia kolory ikony na odcienie jednego koloru (dla ikon bez symbolu). */
+    private static ColorMatrixColorFilter tintTo(int color) {
+        float r = Color.red(color) / 255f, g = Color.green(color) / 255f, b = Color.blue(color) / 255f;
+        float k = 1.35f;
+        return new ColorMatrixColorFilter(new ColorMatrix(new float[]{
+                0.30f * r * k, 0.59f * r * k, 0.11f * r * k, 0, 0,
+                0.30f * g * k, 0.59f * g * k, 0.11f * g * k, 0, 0,
+                0.30f * b * k, 0.59f * b * k, 0.11f * b * k, 0, 0,
+                0, 0, 0, 1, 0}));
+    }
 
     public boolean labels() { return prefs.getBoolean("icon_labels", true); }
 
@@ -263,8 +318,16 @@ public class IconFactory {
         } catch (Exception ignored) {
         }
 
-        if (st == 1 || st == 2) {
-            drawTintedBase(c, clip, px, st == 2);
+        if (st == 1 || st == 2 || st == 3) {
+            int[] pal = st == 3 ? wallPalette() : null;
+            if (pal != null) {
+                Paint bgp = new Paint(Paint.ANTI_ALIAS_FLAG);
+                bgp.setShader(new LinearGradient(0, 0, 0, px, pal[0], pal[1], Shader.TileMode.CLAMP));
+                c.drawPath(clip, bgp);
+            } else {
+                drawTintedBase(c, clip, px, st == 2);
+            }
+            int glyphColor = pal != null ? pal[2] : (st == 2 ? 0xFF8AB4FF : Color.WHITE);
             Drawable mono = null;
             if (Build.VERSION.SDK_INT >= 33 && d instanceof AdaptiveIconDrawable) {
                 mono = ((AdaptiveIconDrawable) d).getMonochrome();
@@ -275,7 +338,7 @@ public class IconFactory {
                 a.setBounds(0, 0, px, px);
                 Drawable m = mono.mutate();
                 m.setBounds(a.getForeground().getBounds());
-                m.setColorFilter(new PorterDuffColorFilter(st == 2 ? 0xFF8AB4FF : Color.WHITE, PorterDuff.Mode.SRC_IN));
+                m.setColorFilter(new PorterDuffColorFilter(glyphColor, PorterDuff.Mode.SRC_IN));
                 c.save();
                 c.clipPath(clip);
                 m.draw(c);
@@ -284,14 +347,15 @@ public class IconFactory {
                 // brak symbolu – zwykła ikona, wyszarzona (szklane) lub przyciemniona (ciemne)
                 Bitmap normal = renderNormal(d, px, clip);
                 Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-                p.setColorFilter(st == 1 ? grayscale() : dim());
+                p.setColorFilter(pal != null ? tintTo(glyphColor) : (st == 1 ? grayscale() : dim()));
                 int in = Math.round(px * 0.16f);
                 c.save();
                 c.clipPath(clip);
                 c.drawBitmap(normal, null, new RectF(in, in, px - in, px - in), p);
                 c.restore();
             }
-            drawRim(c, clip, px);
+            if (pal == null || pal[3] == 0) drawRim(c, clip, px);
+            else drawLightRim(c, clip, px);
             return badge(b, user, px);
         }
 
@@ -353,6 +417,17 @@ public class IconFactory {
         rim.setStrokeWidth(Math.max(1f, px * 0.022f));
         rim.setShader(new LinearGradient(0, 0, px, px, new int[]{0x99FFFFFF, 0x14FFFFFF, 0x40FFFFFF},
                 null, Shader.TileMode.CLAMP));
+        c.save();
+        c.clipPath(clip);
+        c.drawPath(clip, rim);
+        c.restore();
+    }
+
+    private void drawLightRim(Canvas c, Path clip, int px) {
+        Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
+        rim.setStyle(Paint.Style.STROKE);
+        rim.setStrokeWidth(Math.max(1f, px * 0.02f));
+        rim.setShader(new LinearGradient(0, 0, 0, px, 0xCCFFFFFF, 0x1F000000, Shader.TileMode.CLAMP));
         c.save();
         c.clipPath(clip);
         c.drawPath(clip, rim);

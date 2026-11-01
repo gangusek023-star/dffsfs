@@ -206,6 +206,8 @@ public class MainActivity extends Activity {
                 android.app.WallpaperManager.getInstance(this).addOnColorsChangedListener((colors, which) -> {
                     readWallpaperTint();
                     invalidateTree(root);
+                    // ikony w stylu "Tapeta"/"Szklane" przebarwiają się same po zmianie tapety
+                    if (icons != null && icons.dependsOnWallpaper()) reloadIcons();
                 }, main);
             } catch (Exception ignored) {
             }
@@ -294,6 +296,8 @@ public class MainActivity extends Activity {
                 android.app.WallpaperColors wc = android.app.WallpaperManager.getInstance(this)
                         .getWallpaperColors(android.app.WallpaperManager.FLAG_SYSTEM);
                 if (wc != null) {
+                    IconFactory.wallPrimary = wc.getPrimaryColor().toArgb();
+                    IconFactory.wallSecondary = wc.getSecondaryColor() != null ? wc.getSecondaryColor().toArgb() : 0;
                     float[] hsv = new float[3];
                     Color.colorToHSV(wc.getPrimaryColor().toArgb(), hsv);
                     hsv[2] = Math.min(hsv[2], 0.35f);
@@ -1827,6 +1831,12 @@ public class MainActivity extends Activity {
         col.addView(sectionLabel("STYL"));
         col.addView(chips(IconFactory.STYLES, icons.style(), i -> {
             prefs.edit().putInt("icon_style", i).apply();
+            refreshPreview.run();
+        }));
+        col.addView(sectionLabel("TON (STYL „TAPETA”)"));
+        col.addView(chips(IconFactory.TONES, icons.tone(), i -> {
+            prefs.edit().putInt("icon_tone", i).apply();
+            if (icons.style() != 3) prefs.edit().putInt("icon_style", 3).apply();
             refreshPreview.run();
         }));
         col.addView(sectionLabel("ROZMIAR"));
