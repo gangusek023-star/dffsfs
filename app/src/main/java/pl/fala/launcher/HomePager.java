@@ -15,6 +15,18 @@ public class HomePager extends ViewGroup {
         void onPage(int page, float offset);
     }
 
+    /** Gesty na pustym miejscu strony. */
+    interface EmptyListener {
+        void onLongPress();
+
+        void onDoubleTap();
+
+        void onTap();
+    }
+
+    private EmptyListener empty;
+    private final android.view.GestureDetector gd;
+
     private final OverScroller scroller;
     private final int slop, minFling;
     private VelocityTracker vt;
@@ -30,6 +42,28 @@ public class HomePager extends ViewGroup {
         slop = vc.getScaledTouchSlop();
         minFling = vc.getScaledMinimumFlingVelocity() * 4;
         setClipChildren(false);
+        gd = new android.view.GestureDetector(c, new android.view.GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public void onLongPress(MotionEvent e) {
+                if (!dragging && empty != null) empty.onLongPress();
+            }
+
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                if (empty != null) empty.onDoubleTap();
+                return true;
+            }
+
+            @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                if (empty != null) empty.onTap();
+                return true;
+            }
+        });
+    }
+
+    void setEmptyListener(EmptyListener l) {
+        empty = l;
     }
 
     void setListener(Listener l) {
@@ -117,6 +151,7 @@ public class HomePager extends ViewGroup {
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         track(e);
+        gd.onTouchEvent(e);
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 return true;

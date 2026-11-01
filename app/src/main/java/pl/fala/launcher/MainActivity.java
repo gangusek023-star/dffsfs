@@ -400,6 +400,7 @@ public class MainActivity extends Activity {
             @Override public void openSearch() { openDrawerWithSearch(); }
             @Override public IconFactory icons() { return icons; }
             @Override public void onEditChanged(boolean editing) { }
+            @Override public void onEmptyDoubleTap() { openAssistant(); }
         }, prefs, root);
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, 0, 1f);
         hlp.topMargin = dp(36);
@@ -2165,6 +2166,12 @@ public class MainActivity extends Activity {
         @Override
         public boolean onTouchEvent(MotionEvent e) {
             track(e);
+            if (homeCtl.editing()) {
+                // w trybie edycji puste miejsce (np. obok docka) kończy edycję, szuflada się nie otwiera
+                if (e.getActionMasked() == MotionEvent.ACTION_DOWN) { downX = e.getX(); downY = e.getY(); }
+                if (e.getActionMasked() == MotionEvent.ACTION_UP && Math.hypot(e.getX() - downX, e.getY() - downY) < slop) homeCtl.setEditing(false);
+                return true;
+            }
             gd.onTouchEvent(e);
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:

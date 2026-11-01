@@ -69,6 +69,8 @@ public class HomeController implements HomeGrid.Listener {
         IconFactory icons();
 
         void onEditChanged(boolean editing);
+
+        void onEmptyDoubleTap();
     }
 
     static final int REQ_WIDGET_PHOTO = 71;
@@ -109,6 +111,11 @@ public class HomeController implements HomeGrid.Listener {
         root.setOrientation(LinearLayout.VERTICAL);
         pager = new HomePager(act);
         pager.setListener((page, offset) -> dots.set(pager.count(), offset));
+        pager.setEmptyListener(new HomePager.EmptyListener() {
+            @Override public void onLongPress() { if (!editing) setEditing(true); }
+            @Override public void onDoubleTap() { if (!editing) host.onEmptyDoubleTap(); }
+            @Override public void onTap() { if (editing) setEditing(false); }
+        });
         root.addView(pager, new LinearLayout.LayoutParams(-1, 0, 1f));
         dotsPill = new LinearLayout(act);
         dotsPill.setGravity(Gravity.CENTER);
