@@ -76,8 +76,24 @@ public class HomeGrid extends ViewGroup {
     }
 
     void clear() {
+        stopJiggle();
         items.clear();
         removeAllViews();
+    }
+
+    /** Zatrzymuje nieskończone animacje drgania (inaczej działałyby dalej po usunięciu strony). */
+    void stopJiggle() {
+        for (int i = 0; i < getChildCount(); i++) {
+            Object a = getChildAt(i).getTag(R.id.jiggle);
+            if (a instanceof ObjectAnimator) ((ObjectAnimator) a).cancel();
+            getChildAt(i).setTag(R.id.jiggle, null);
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        stopJiggle();
+        super.onDetachedFromWindow();
     }
 
     float cellW() {

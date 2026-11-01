@@ -160,11 +160,25 @@ public class HomeController implements HomeGrid.Listener {
         rebuild();
     }
 
+    /** Przeładowuje układ tylko wtedy, gdy zmieniła go inna część aplikacji (Skróty, przypięty skrót). */
+    void reloadIfChanged() {
+        if (model.savedRev() != model.rev) reload();
+    }
+
+    private static final android.util.LruCache<String, Bitmap> photoCache =
+            new android.util.LruCache<String, Bitmap>(24 * 1024 * 1024) {
+                @Override
+                protected int sizeOf(String k, Bitmap b) {
+                    return b.getByteCount();
+                }
+            };
+
     // ---------- budowanie ----------
 
     void rebuild() {
         if (pager == null) return;
         int keep = pager.page();
+        for (HomeGrid g : grids) g.stopJiggle();
         pager.removeAllViews();
         grids.clear();
         int count = model.pages + (editing ? 1 : 0);
@@ -328,8 +342,12 @@ public class HomeController implements HomeGrid.Listener {
         File f = it.key != null ? widgetFile(act, it.key) : null;
         if (f != null && f.exists()) {
             int maxPx = dp(it.w * 100);
-            new Thread(() -> {
+            String ck = it.key + "@" + maxPx;
+            Bitmap cached = photoCache.get(ck);
+            if (cached != null) iv.setImageBitmap(cached);
+            else new Thread(() -> {
                 Bitmap b = decode(f, maxPx);
+                if (b != null) photoCache.put(ck, b);
                 act.runOnUiThread(() -> iv.setImageBitmap(b));
             }).start();
         } else {

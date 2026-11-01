@@ -57,6 +57,8 @@ public class HomeModel {
     int pages = 1;
     /** Nowa instalacja – domyślne aplikacje dodamy, gdy będą wybrane. */
     boolean fresh = false;
+    /** Numer wersji zapisanego układu – przeładowujemy tylko, gdy zmienił go ktoś inny. */
+    long rev = 0;
     private final SharedPreferences prefs;
 
     HomeModel(SharedPreferences prefs) {
@@ -64,8 +66,13 @@ public class HomeModel {
         load();
     }
 
+    long savedRev() {
+        return prefs.getLong("home2_rev", 0);
+    }
+
     void load() {
         items.clear();
+        rev = savedRev();
         String s = prefs.getString("home2", null);
         if (s != null) {
             try {
@@ -97,7 +104,9 @@ public class HomeModel {
         try {
             JSONArray a = new JSONArray();
             for (Item i : items) a.put(i.json());
-            prefs.edit().putString("home2", new JSONObject().put("pages", pages).put("items", a).toString()).apply();
+            rev = savedRev() + 1;
+            prefs.edit().putString("home2", new JSONObject().put("pages", pages).put("items", a).toString())
+                    .putLong("home2_rev", rev).apply();
         } catch (Exception ignored) {
         }
     }

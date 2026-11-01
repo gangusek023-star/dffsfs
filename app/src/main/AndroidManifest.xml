@@ -68,6 +68,7 @@
     </queries>
 
     <application
+        android:name=".FalaApp"
         android:label="Fala"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"

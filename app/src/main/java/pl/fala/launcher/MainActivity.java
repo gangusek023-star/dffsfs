@@ -236,6 +236,52 @@ public class MainActivity extends Activity {
         LockActivity.ensureScreenReceiver(getApplicationContext());
         islandCtl.start();
         loadApps();
+        main.postDelayed(this::showCrashReport, 1500);
+    }
+
+    /** Jeśli Fala wcześniej się zamknęła z powodu błędu – pokaż raport do skopiowania. */
+    private void showCrashReport() {
+        java.io.File f = FalaApp.crashFile(this);
+        if (!f.exists()) return;
+        String report;
+        try {
+            report = new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8");
+        } catch (Exception e) {
+            report = "";
+        }
+        //noinspection ResultOfMethodCallIgnored
+        f.delete();
+        if (report.isEmpty()) return;
+        final String r = report;
+        LinearLayout box = dialogBox("Fala się zamknęła 😕");
+        TextView d = new TextView(this);
+        d.setText("Wystąpił błąd. Skopiuj raport i wklej go w czacie z Claude – dzięki temu naprawię przyczynę.");
+        d.setTextColor(0xB3FFFFFF);
+        d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        box.addView(d);
+        TextView pre = new TextView(this);
+        pre.setText(r.length() > 600 ? r.substring(0, 600) + "…" : r);
+        pre.setTextColor(0x99FFFFFF);
+        pre.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        pre.setTypeface(Typeface.MONOSPACE);
+        pre.setPadding(0, dp(10), 0, dp(6));
+        box.addView(pre);
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
+        LinearLayout btns = new LinearLayout(this);
+        btns.setGravity(Gravity.END);
+        TextView close = dialogButton("Zamknij");
+        close.setOnClickListener(v -> dlg.dismiss());
+        TextView copy = dialogButton("Kopiuj raport");
+        copy.setOnClickListener(v -> {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("Fala – raport", r));
+            Toast.makeText(this, "Skopiowano – wklej w czacie", Toast.LENGTH_SHORT).show();
+            dlg.dismiss();
+        });
+        btns.addView(close);
+        btns.addView(copy);
+        box.addView(btns);
+        showGlassDialog(dlg);
     }
 
     @Override
@@ -246,7 +292,7 @@ public class MainActivity extends Activity {
         islandCtl.refresh();
         updateGlobalIsland();
         // zmiany z aplikacji Skróty / przypięte skróty z innych aplikacji
-        if (!byKey.isEmpty() && !homeCtl.editing()) homeCtl.reload();
+        if (!byKey.isEmpty() && !homeCtl.editing()) homeCtl.reloadIfChanged();
         updateWidgetTexts();
         if (!drawerOpen) playEntrance();
     }
@@ -2003,6 +2049,14 @@ public class MainActivity extends Activity {
         actions.add(this::toggleLock);
         labels.add(globalIslandPref() ? "⬬  Wyspa w każdej aplikacji: włączona" : "⬬  Wyspa w każdej aplikacji: wyłączona");
         actions.add(this::toggleGlobalIsland);
+        int nm = getSharedPreferences("fala", MODE_PRIVATE).getInt("island_notif_mode", 0);
+        String[] nmNames = {"inteligentne (bez nakładania)", "zawsze duże", "wyłączone"};
+        labels.add("🔔  Powiadomienia na wyspie: " + nmNames[Math.max(0, Math.min(2, nm))]);
+        actions.add(() -> {
+            int next = (getSharedPreferences("fala", MODE_PRIVATE).getInt("island_notif_mode", 0) + 1) % 3;
+            getSharedPreferences("fala", MODE_PRIVATE).edit().putInt("island_notif_mode", next).apply();
+            showSettings();
+        });
         labels.add("🎨  Wygląd ikon");
         actions.add(this::showIconSettings);
         labels.add("Zmień tapetę");

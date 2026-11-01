@@ -91,6 +91,7 @@ public class IslandView extends FrameLayout {
 
     private final Runnable bannerEnd = () -> {
         if (state == S_BANNER) {
+            miniTap = null;
             state = S_IDLE;
             updateCompact();
         } else if (state == S_NOTIF) {
@@ -130,6 +131,20 @@ public class IslandView extends FrameLayout {
         setElevation(dp(4));
 
         setOnClickListener(v -> {
+            if (state == S_BANNER && miniTap != null) {
+                Runnable r = miniTap;
+                miniTap = null;
+                handler.removeCallbacks(bannerEnd);
+                java.util.function.Supplier<View> ex = notifExpander;
+                View card = ex != null ? ex.get() : null;
+                if (card != null) expandWithView(card);
+                else {
+                    state = S_IDLE;
+                    updateCompact();
+                    r.run();
+                }
+                return;
+            }
             if (state == S_NOTIF) {
                 Runnable r = notifTap;
                 endNotif();
@@ -511,8 +526,43 @@ public class IslandView extends FrameLayout {
         torchBtn.setColorFilter(on ? Color.BLACK : Color.WHITE);
     }
 
+    private Runnable miniTap;
+
+    /**
+     * Mała pigułka powiadomienia (ikona + nadawca) – gdy Android sam pokazuje wyskakujące
+     * powiadomienie, duży baner by na nie nachodził. Dotknięcie rozwija interaktywną kartę.
+     */
+    public void showMiniNotification(Drawable icon, String title, Runnable onTap,
+                                     java.util.function.Supplier<View> expander) {
+        if (state == S_EXPANDED || state == S_NOTIF) return;
+        handler.removeCallbacks(bannerEnd);
+        state = S_BANNER;
+        miniTap = onTap;
+        notifExpander = expander;
+        compactIcon.setVisibility(VISIBLE);
+        compactIcon.setColorFilter(null);
+        compactIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        compactIcon.setImageDrawable(icon);
+        compactText.setVisibility(VISIBLE);
+        compactText.setText(title == null ? "" : title);
+        compactText.setMaxWidth(dp(170));
+        compactText.setSingleLine(true);
+        compactText.setEllipsize(TextUtils.TruncateAt.END);
+        compactRight.setVisibility(VISIBLE);
+        compactRight.setTextColor(0xFF4A9DFF);
+        compactRight.setText("●");
+        compactEq.setVisibility(GONE);
+        int w = Math.min(getResources().getDisplayMetrics().widthPixels - dp(48), dp(270));
+        setCompactSize(w, dp(36));
+        compact.animate().alpha(1f).setStartDelay(120).setDuration(200).start();
+        animateSize(w, dp(36));
+        handler.postDelayed(bannerEnd, 5000);
+    }
+
     public void showChargingBanner() {
         if (state == S_EXPANDED || state == S_NOTIF) return;
+        miniTap = null;
+        notifExpander = null;
         state = S_BANNER;
         compactIcon.setVisibility(VISIBLE);
         compactIcon.setImageResource(R.drawable.ic_flash);

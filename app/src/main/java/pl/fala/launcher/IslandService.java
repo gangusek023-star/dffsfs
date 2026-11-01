@@ -326,7 +326,8 @@ public class IslandService extends Service {
     void onNotification(StatusBarNotification sbn) {
         if (island == null || locked || fullscreenApp || !islandOn()) return;
         if (inGame && getSharedPreferences("fala", MODE_PRIVATE).getBoolean("game_block_banners", true)) return;
-        if (!getSharedPreferences("fala", MODE_PRIVATE).getBoolean("island_notifs", true)) return;
+        int mode = getSharedPreferences("fala", MODE_PRIVATE).getInt("island_notif_mode", 0); // 0 inteligentny, 1 zawsze duży, 2 wył.
+        if (mode == 2) return;
         if (sbn.isOngoing() || sbn.getPackageName().equals(getPackageName())) return;
         Notification n = sbn.getNotification();
         if ((n.flags & Notification.FLAG_GROUP_SUMMARY) != 0) return;
@@ -352,30 +353,48 @@ public class IslandService extends Service {
         final String tx = text != null ? text.toString() : "";
         final Drawable ic = icon;
         final StatusBarNotification s = sbn;
-        main.post(() -> island.showNotification(ic, t, tx, () -> IslandController.sendPending(this, pi),
-                () -> NotifUi.card(this, s, false, new NotifUi.Callbacks() {
-                    @Override
-                    public void onOpen(PendingIntent p) {
-                        setFocusable(false);
-                        island.collapse();
-                        IslandController.sendPending(IslandService.this, p);
-                    }
+        // czy Android sam pokaże wyskakujące powiadomienie? wtedy tylko mała pigułka, żeby się nie nakładały
+        boolean headsUp = false;
+        try {
+            MediaListener l = MediaListener.instance;
+            if (l != null) {
+                android.service.notification.NotificationListenerService.Ranking r =
+                        new android.service.notification.NotificationListenerService.Ranking();
+                if (l.getCurrentRanking().getRanking(sbn.getKey(), r)) {
+                    headsUp = r.getImportance() >= android.app.NotificationManager.IMPORTANCE_HIGH;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        final boolean mini = mode == 0 && headsUp;
+        java.util.function.Supplier<View> expander = () -> NotifUi.card(this, s, false, new NotifUi.Callbacks() {
+            @Override
+            public void onOpen(PendingIntent p) {
+                setFocusable(false);
+                island.collapse();
+                IslandController.sendPending(IslandService.this, p);
+            }
 
-                    @Override
-                    public void onActivityAction(PendingIntent p) {
-                        onOpen(p);
-                    }
+            @Override
+            public void onActivityAction(PendingIntent p) {
+                onOpen(p);
+            }
 
-                    @Override
-                    public void onDone() {
-                        setFocusable(false);
-                        island.collapse();
-                    }
+            @Override
+            public void onDone() {
+                setFocusable(false);
+                island.collapse();
+            }
 
-                    @Override
-                    public void onWantsKeyboard(boolean want) {
-                        setFocusable(want);
-                    }
-                })));
+            @Override
+            public void onWantsKeyboard(boolean want) {
+                setFocusable(want);
+            }
+        });
+        if (mini) {
+            main.post(() -> island.showMiniNotification(ic, t, () -> IslandController.sendPending(this, pi), expander));
+            return;
+        }
+        main.post(() -> island.showNotification(ic, t, tx, () -> IslandController.sendPending(this, pi), expander));
     }
 }
