@@ -86,7 +86,12 @@ public class GameMode {
         public void run() {
             if (!running) return;
             try {
-                check();
+                bg.execute(() -> {
+                    try {
+                        check();
+                    } catch (Exception ignored) {
+                    }
+                });
             } catch (Exception ignored) {
             }
             main.postDelayed(this, 1500);
@@ -136,19 +141,81 @@ public class GameMode {
         return new HashSet<>(c.getSharedPreferences("fala", Context.MODE_PRIVATE).getStringSet(name, new HashSet<>()));
     }
 
-    /** Czy pakiet to gra: wybór użytkownika > kategoria „Gry” w systemie. */
+    /** Wydawcy i słowa w nazwach pakietów typowe dla gier. */
+    private static final String[] GAME_WORDS = {
+            "game", "supercell", "com.ea.", "playrix", "com.king.", "rovio", "miniclip", "roblox", "mojang",
+            "epicgames", "tencent.ig", "pubg", "garena", "dts.freefire", "mihoyo", "hoyoverse", "activision",
+            "netease", "zynga", "gameloft", "nekki", "voodoo", "ketchapp", "outfit7", "halfbrick", "imangi",
+            "kiloo", "sybo", "innersloth", "riotgames", "netmarble", "moonactive", "scopely", "playtika",
+            "nianticlabs", "ubisoft", "square_enix", "squareenix", "bandainamco", "konami", "sega.", "nintendo",
+            "habby", "lilithgames", "funplus", "igg.", "kabam", "jagex", "chess", "puzzle", "solitaire",
+            "sudoku", "minecraft", "fortnite", "clashofclans", "candycrush", "subwaysurf", "pvz"};
+
+    /** Biblioteki silników gier (Unity, Unreal, Cocos, Godot, Supercell...). */
+    private static final String[] ENGINE_LIBS = {
+            "libunity.so", "libil2cpp.so", "libUE4.so", "libUnreal.so", "libcocos2dcpp.so", "libcocos2djs.so",
+            "libcocos.so", "libgodot_android.so", "libgdx.so", "libg.so", "libmono.so", "libmonosgen-2.0.so",
+            "libgame.so", "libfmod.so", "libGameCore.so", "libyoyo.so", "libdefold.so", "libsdl2.so", "libSDL2.so"};
+
+    /** Czy pakiet to gra: wybór użytkownika > kategoria systemowa > nazwa > silnik gry w APK. */
     static boolean isGame(Context c, String pkg) {
         if (pkg == null || pkg.equals(c.getPackageName())) return false;
         if (set(c, "games_add").contains(pkg)) return true;
         if (set(c, "games_remove").contains(pkg)) return false;
+        SharedPreferences p = c.getSharedPreferences("fala", Context.MODE_PRIVATE);
         try {
-            ApplicationInfo ai = c.getPackageManager().getApplicationInfo(pkg, 0);
+            PackageManager pm = c.getPackageManager();
+            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+            if ((ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0) {
+                return false;
+            }
             if (ai.category == ApplicationInfo.CATEGORY_GAME) return true;
             //noinspection deprecation
-            return (ai.flags & ApplicationInfo.FLAG_IS_GAME) != 0;
+            if ((ai.flags & ApplicationInfo.FLAG_IS_GAME) != 0) return true;
+            String low = pkg.toLowerCase(Locale.ROOT);
+            for (String w : GAME_WORDS) if (low.contains(w)) return true;
+            // wynik skanowania APK zapamiętujemy (do aktualizacji aplikacji)
+            long upd = pm.getPackageInfo(pkg, 0).lastUpdateTime;
+            String key = "gd_" + pkg;
+            String cached = p.getString(key, null);
+            if (cached != null && cached.startsWith(upd + ":")) return cached.endsWith(":1");
+            boolean found = hasEngine(ai);
+            p.edit().putString(key, upd + ":" + (found ? "1" : "0")).apply();
+            return found;
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private static boolean hasEngine(ApplicationInfo ai) {
+        java.util.List<String> apks = new java.util.ArrayList<>();
+        if (ai.sourceDir != null) apks.add(ai.sourceDir);
+        if (ai.splitSourceDirs != null) java.util.Collections.addAll(apks, ai.splitSourceDirs);
+        // biblioteki rozpakowane na dysk
+        try {
+            if (ai.nativeLibraryDir != null) {
+                String[] files = new java.io.File(ai.nativeLibraryDir).list();
+                if (files != null) for (String f : files) for (String e : ENGINE_LIBS) if (f.equals(e)) return true;
+            }
+        } catch (Exception ignored) {
+        }
+        for (String apk : apks) {
+            try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(apk)) {
+                java.util.Enumeration<? extends java.util.zip.ZipEntry> en = z.entries();
+                while (en.hasMoreElements()) {
+                    String n = en.nextElement().getName();
+                    if (!n.startsWith("lib/")) {
+                        if (n.startsWith("assets/bin/Data/") || n.startsWith("assets/aa/")) return true; // Unity
+                        continue;
+                    }
+                    int slash = n.lastIndexOf('/');
+                    String base = slash >= 0 ? n.substring(slash + 1) : n;
+                    for (String e : ENGINE_LIBS) if (base.equals(e)) return true;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return false;
     }
 
     static void markGame(Context c, String pkg, boolean game) {
@@ -164,7 +231,11 @@ public class GameMode {
         }
         p.edit().putStringSet("games_add", add).putStringSet("games_remove", rem).apply();
         IslandService s = IslandService.instance;
-        if (s != null && s.game != null) s.game.gameCache.clear();
+        if (s != null && s.game != null) {
+            synchronized (s.game.gameCache) {
+                s.game.gameCache.clear();
+            }
+        }
     }
 
     // ---------- cykl ----------
@@ -182,33 +253,66 @@ public class GameMode {
         bg.shutdownNow();
     }
 
+    /** Działa w tle; zmiany interfejsu przekazuje do wątku głównego. */
     private void check() {
-        if (!enabled(ctx) || !hasUsageAccess(ctx)) {
-            if (currentGame != null) exitGame();
+        if (!enabled(ctx)) {
+            main.post(this::exitGame);
             return;
         }
+        if (!hasUsageAccess(ctx)) return; // bez dostępu działa tylko start gry z ekranu głównego Fali
         PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
         if (pm != null && !pm.isInteractive()) return;
         String fg = foreground();
         if (fg == null) return;
         if (fg.equals(ctx.getPackageName())) {
             // nasze okna (asystent, ustawienia) nie przerywają gry – ale ekran główny tak
-            if (currentGame != null && lastClass != null && lastClass.endsWith(".MainActivity")) exitGame();
+            String cls = lastClass;
+            if (cls != null && cls.endsWith(".MainActivity")) main.post(this::exitGame);
             return;
         }
-        Boolean g = gameCache.get(fg);
+        Boolean g;
+        synchronized (gameCache) {
+            g = gameCache.get(fg);
+        }
         if (g == null) {
             g = isGame(ctx, fg);
-            gameCache.put(fg, g);
-        }
-        if (g) {
-            if (!fg.equals(currentGame)) {
-                if (currentGame != null) exitGame();
-                enterGame(fg);
+            synchronized (gameCache) {
+                gameCache.put(fg, g);
             }
-        } else if (currentGame != null) {
-            exitGame();
         }
+        final boolean game = g;
+        main.post(() -> {
+            if (game) {
+                if (!fg.equals(currentGame)) {
+                    if (currentGame != null) exitGame();
+                    enterGame(fg);
+                }
+            } else if (currentGame != null) {
+                exitGame();
+            }
+        });
+    }
+
+    /** Gra uruchomiona z ekranu głównego Fali – działa nawet bez dostępu do użycia aplikacji. */
+    void onLaunched(String pkg) {
+        if (!enabled(ctx)) return;
+        bg.execute(() -> {
+            boolean g = isGame(ctx, pkg);
+            synchronized (gameCache) {
+                gameCache.put(pkg, g);
+            }
+            if (g) main.postDelayed(() -> {
+                if (!pkg.equals(currentGame)) {
+                    if (currentGame != null) exitGame();
+                    enterGame(pkg);
+                }
+            }, 700);
+        });
+    }
+
+    /** Ekran główny Fali jest na wierzchu – gra na pewno nie. */
+    void onHomeVisible() {
+        main.post(this::exitGame);
     }
 
     private String foreground() {

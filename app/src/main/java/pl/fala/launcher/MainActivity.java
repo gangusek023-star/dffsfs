@@ -240,6 +240,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        IslandService gs = IslandService.instance;
+        if (gs != null && gs.game != null) gs.game.onHomeVisible();
         islandCtl.refresh();
         updateGlobalIsland();
         updateWidgetTexts();
@@ -1224,6 +1226,8 @@ public class MainActivity extends Activity {
                 opts = ActivityOptions.makeScaleUpAnimation(v, 0, 0, v.getWidth(), v.getHeight()).toBundle();
             }
             launcherApps.startMainActivity(a.component, a.user, r, opts);
+            IslandService gs = IslandService.instance;
+            if (gs != null && gs.game != null) gs.game.onLaunched(a.component.getPackageName());
             usage.edit().putInt(a.key, usage.getInt(a.key, 0) + 1).apply();
         } catch (Exception e) {
             Toast.makeText(this, "Nie można uruchomić: " + a.label, Toast.LENGTH_SHORT).show();
@@ -1468,17 +1472,21 @@ public class MainActivity extends Activity {
                 i -> prefs.edit().putBoolean("game_block_banners", i == 0).apply()));
 
         col.addView(sectionLabel("WYKRYTE GRY"));
-        StringBuilder sb = new StringBuilder();
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        for (App a : apps) {
-            String pkg = a.component.getPackageName();
-            if (seen.add(pkg) && GameMode.isGame(this, pkg)) {
-                if (sb.length() > 0) sb.append(", ");
-                sb.append(a.label);
-            }
-        }
         TextView games = new TextView(this);
-        games.setText(sb.length() > 0 ? sb.toString() : "Nie wykryto gier.");
+        games.setText("Szukam gier…");
+        final List<App> snapshot = new ArrayList<>(apps);
+        exec.execute(() -> {
+            StringBuilder sb = new StringBuilder();
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (App a : snapshot) {
+                String pkg = a.component.getPackageName();
+                if (seen.add(pkg) && GameMode.isGame(this, pkg)) {
+                    if (sb.length() > 0) sb.append(", ");
+                    sb.append(a.label);
+                }
+            }
+            main.post(() -> games.setText(sb.length() > 0 ? sb.toString() : "Nie wykryto gier."));
+        });
         games.setTextColor(Color.WHITE);
         games.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         games.setPadding(dp(4), 0, dp(4), dp(6));
