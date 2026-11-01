@@ -129,6 +129,7 @@ public class LockActivity extends Activity {
             ilp.topMargin = IslandView.topFor(this, Build.VERSION.SDK_INT >= 28 ? ins.getDisplayCutout() : null,
                     insetTop, island.idleH());
             island.setLayoutParams(ilp);
+            island.setCoverTop(insetTop - ilp.topMargin);
             return ins;
         });
 

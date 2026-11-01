@@ -213,7 +213,7 @@ public class IslandService extends Service {
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
         lp = new WindowManager.LayoutParams(
-                island.idleW() + dp(16), island.idleH() + dp(12), type,
+                island.idleW() + dp(16), island.idleH() + island.touchExtra() + dp(4), type,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
@@ -230,6 +230,7 @@ public class IslandService extends Service {
             }
         }
         lp.y = IslandView.topFor(this, dc, statusBarHeight(), island.idleH());
+        island.setCoverTop(statusBarHeight() - lp.y);
         if (Build.VERSION.SDK_INT >= 28) {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
@@ -248,7 +249,7 @@ public class IslandService extends Service {
     private void resize(int w, int h, boolean starting) {
         if (!attached) return;
         int ww = w + dp(16);
-        int wh = h + dp(14);
+        int wh = h + Math.max(dp(14), island.touchExtra() + dp(4));
         if (starting) {
             if (ww > lp.width || wh > lp.height) {
                 lp.width = Math.max(ww, lp.width);

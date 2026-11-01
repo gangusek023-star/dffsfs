@@ -284,30 +284,32 @@ public class IslandView extends FrameLayout {
         notifPanel = new LinearLayout(c);
         notifPanel.setOrientation(LinearLayout.HORIZONTAL);
         notifPanel.setGravity(Gravity.CENTER_VERTICAL);
-        notifPanel.setPadding(dp(14), dp(12), dp(18), dp(12));
+        notifPanel.setPadding(dp(16), dp(10), dp(20), dp(12));
         notifIcon = new ImageView(c);
         notifIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
         roundClip(notifIcon, dp(10));
-        notifPanel.addView(notifIcon, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        notifPanel.addView(notifIcon, new LinearLayout.LayoutParams(dp(48), dp(48)));
         LinearLayout nCol = new LinearLayout(c);
         nCol.setOrientation(LinearLayout.VERTICAL);
         nCol.setPadding(dp(12), 0, 0, 0);
         notifTitle = new TextView(c);
         notifTitle.setTextColor(Color.WHITE);
-        notifTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        notifTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         notifTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         notifTitle.setSingleLine(true);
         notifTitle.setEllipsize(TextUtils.TruncateAt.END);
         nCol.addView(notifTitle);
         notifText = new TextView(c);
         notifText.setTextColor(0xB3FFFFFF);
-        notifText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        notifText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        notifText.setSingleLine(false);
+        notifText.setMaxLines(2);
         notifText.setSingleLine(true);
         notifText.setEllipsize(TextUtils.TruncateAt.END);
         nCol.addView(notifText);
         notifPanel.addView(nCol, new LinearLayout.LayoutParams(0, -2, 1f));
         notifPanel.setVisibility(GONE);
-        addView(notifPanel, new LayoutParams(expW, dp(68), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+        addView(notifPanel, new LayoutParams(expW, dp(BANNER_DP), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
         // ---- rozwinięte, interaktywne powiadomienie ----
         customPanel = new FrameLayout(c);
@@ -316,7 +318,7 @@ public class IslandView extends FrameLayout {
         customPanel.addOnLayoutChangeListener((vv, l1, t1, r1, b1, ol1, ot1, or1, ob1) -> {
             int h = b1 - t1;
             if (state == S_EXPANDED && customPanel.getVisibility() == VISIBLE && h > 0 && h != ob1 - ot1) {
-                animateSize(expandedWidth(), Math.max(dp(90), h));
+                animateSize(expandedWidth(), Math.max(dp(90), h) + coverTop);
             }
         });
 
@@ -375,7 +377,7 @@ public class IslandView extends FrameLayout {
         customPanel.animate().alpha(1f).setStartDelay(120).setDuration(220).start();
         customPanel.measure(MeasureSpec.makeMeasureSpec(expandedWidth(), MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
-        animateSize(expandedWidth(), Math.max(dp(90), customPanel.getMeasuredHeight()));
+        animateSize(expandedWidth(), Math.max(dp(90), customPanel.getMeasuredHeight()) + coverTop);
         if (!was && listener != null) listener.onExpandChanged(true);
     }
 
@@ -400,9 +402,9 @@ public class IslandView extends FrameLayout {
         notifPanel.setVisibility(VISIBLE);
         notifPanel.setAlpha(0f);
         notifPanel.animate().alpha(1f).setStartDelay(140).setDuration(220).start();
-        animateSize(expandedWidth(), dp(68));
+        animateSize(expandedWidth(), dp(BANNER_DP) + coverTop);
         performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK);
-        handler.postDelayed(bannerEnd, 4200);
+        handler.postDelayed(bannerEnd, 6500);
     }
 
     private void endNotif() {
@@ -423,6 +425,29 @@ public class IslandView extends FrameLayout {
     public int idleW() { return dp(120); }
 
     public int idleH() { return dp(35); }
+
+    static final int BANNER_DP = 84;
+    static final int TOUCH_EXTRA_DP = 22;
+    private int coverTop = 0;
+
+    /**
+     * Ile pikseli od góry wyspy zasłania systemowy pasek stanu. Pasek przechwytuje tam dotyk,
+     * więc treść rozwiniętej wyspy (przyciski, powiadomienia) zaczyna się poniżej niego.
+     */
+    public void setCoverTop(int px) {
+        px = Math.max(0, px);
+        if (px == coverTop) return;
+        coverTop = px;
+        for (View v : new View[]{infoPanel, musicPanel, notifPanel, customPanel}) {
+            if (v == null) continue;
+            LayoutParams lp = (LayoutParams) v.getLayoutParams();
+            lp.topMargin = px;
+            v.setLayoutParams(lp);
+        }
+    }
+
+    /** Dodatkowa wysokość okna pod wyspą na strefę dotyku. */
+    public int touchExtra() { return dp(TOUCH_EXTRA_DP); }
 
     /**
      * Pozycja wyspy: jeśli telefon ma kamerkę w otworze na środku u góry
@@ -553,7 +578,7 @@ public class IslandView extends FrameLayout {
         show.animate().alpha(1f).setStartDelay(120).setDuration(220).start();
         show.measure(MeasureSpec.makeMeasureSpec(expandedWidth(), MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
-        animateSize(expandedWidth(), Math.max(dp(120), show.getMeasuredHeight()));
+        animateSize(expandedWidth(), Math.max(dp(120), show.getMeasuredHeight()) + coverTop);
     }
 
     private void updateCompact() {
@@ -621,7 +646,10 @@ public class IslandView extends FrameLayout {
     public boolean dispatchTouchEvent(android.view.MotionEvent e) {
         if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
             updatePill();
-            if (!pill.contains(e.getX(), e.getY())) return false;
+            // w stanie zwiniętym strefa dotyku sięga trochę pod pasek stanu – łatwiej trafić
+            float extra = (state == S_EXPANDED || state == S_NOTIF) ? 0 : dp(TOUCH_EXTRA_DP);
+            if (e.getX() < pill.left - dp(8) || e.getX() > pill.right + dp(8)
+                    || e.getY() < pill.top || e.getY() > pill.bottom + extra) return false;
         }
         return super.dispatchTouchEvent(e);
     }

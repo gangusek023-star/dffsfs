@@ -89,7 +89,7 @@ public class NotifUi {
         card.setOrientation(LinearLayout.VERTICAL);
         if (glass) {
             card.setBackground(new GlassDrawable(c.getResources().getDisplayMetrics().density, dp(c, 22), 1.15f));
-            card.setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12));
+            card.setPadding(dp(c, 16), dp(c, 14), dp(c, 16), dp(c, 14));
         } else {
             card.setPadding(dp(c, 18), dp(c, 16), dp(c, 18), dp(c, 14));
         }
@@ -100,17 +100,19 @@ public class NotifUi {
         head.setGravity(Gravity.CENTER_VERTICAL);
         ImageView iv = new ImageView(c);
         iv.setImageDrawable(appIcon);
-        head.addView(iv, new LinearLayout.LayoutParams(dp(c, 20), dp(c, 20)));
-        TextView app = text(c, appName, 12, 0xCCFFFFFF, true);
+        head.addView(iv, new LinearLayout.LayoutParams(dp(c, 24), dp(c, 24)));
+        TextView app = text(c, appName, 14, 0xCCFFFFFF, true);
         app.setPadding(dp(c, 8), 0, 0, 0);
         app.setSingleLine(true);
         head.addView(app, new LinearLayout.LayoutParams(0, -2, 1f));
         TextView when = text(c, DateUtils.getRelativeTimeSpanString(sbn.getPostTime(), System.currentTimeMillis(),
-                DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString(), 12, 0x99FFFFFF, false);
+                DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString(), 13, 0x99FFFFFF, false);
         head.addView(when);
         if (sbn.isClearable()) {
-            TextView x = text(c, "✕", 14, 0x99FFFFFF, false);
-            x.setPadding(dp(c, 12), dp(c, 2), dp(c, 2), dp(c, 2));
+            TextView x = text(c, "✕", 18, 0xB3FFFFFF, false);
+            x.setGravity(Gravity.CENTER);
+            x.setMinWidth(dp(c, 44));
+            x.setMinHeight(dp(c, 40));
             x.setOnClickListener(v -> dismiss(card, sbn, cb, true));
             head.addView(x);
         }
@@ -124,13 +126,13 @@ public class NotifUi {
         texts.setOrientation(LinearLayout.VERTICAL);
         CharSequence title = ex.getCharSequence(Notification.EXTRA_TITLE);
         if (!TextUtils.isEmpty(title)) {
-            TextView t = text(c, title, 15, Color.WHITE, true);
+            TextView t = text(c, title, 17, Color.WHITE, true);
             t.setSingleLine(true);
             t.setEllipsize(TextUtils.TruncateAt.END);
             texts.addView(t);
         }
-        final TextView msg = text(c, bodyText(ex), 14, 0xE6FFFFFF, false);
-        msg.setMaxLines(3);
+        final TextView msg = text(c, bodyText(ex), 16, 0xE6FFFFFF, false);
+        msg.setMaxLines(4);
         msg.setEllipsize(TextUtils.TruncateAt.END);
         msg.setLineSpacing(dp(c, 2), 1f);
         msg.setPadding(0, dp(c, 2), 0, 0);
@@ -148,7 +150,7 @@ public class NotifUi {
                 }
             });
             av.setClipToOutline(true);
-            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(dp(c, 38), dp(c, 38));
+            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(dp(c, 46), dp(c, 46));
             alp.leftMargin = dp(c, 10);
             body.addView(av, alp);
         }
@@ -157,7 +159,7 @@ public class NotifUi {
         // dotknięcie treści: pierwszy raz rozwija, drugi otwiera aplikację
         final PendingIntent content = nf.contentIntent;
         body.setOnClickListener(v -> {
-            if (msg.getMaxLines() <= 3 && msg.getLineCount() > 3) {
+            if (msg.getMaxLines() <= 4 && msg.getLineCount() > 4) {
                 msg.setMaxLines(12);
             } else {
                 cb.onOpen(content);
@@ -173,7 +175,7 @@ public class NotifUi {
 
             LinearLayout row = new LinearLayout(c);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setPadding(0, dp(c, 10), 0, 0);
+            row.setPadding(0, dp(c, 12), 0, 0);
             int shown = 0;
             for (final Notification.Action a : actions) {
                 if (a == null || a.title == null || shown >= 3) continue;
@@ -182,7 +184,7 @@ public class NotifUi {
                 final RemoteInput free = freeInput(inputs);
                 TextView b = button(c, a.title.toString(), free != null);
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
-                if (shown > 1) lp.leftMargin = dp(c, 6);
+                if (shown > 1) lp.leftMargin = dp(c, 8);
                 row.addView(b, lp);
                 if (free != null) {
                     b.setOnClickListener(v -> {
@@ -261,7 +263,7 @@ public class NotifUi {
         et.setHint(TextUtils.isEmpty(label) ? "Odpowiedz…" : label);
         et.setHintTextColor(0x80FFFFFF);
         et.setTextColor(Color.WHITE);
-        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         et.setMaxLines(4);
         et.setImeOptions(EditorInfo.IME_ACTION_SEND);
@@ -270,7 +272,7 @@ public class NotifUi {
         sendBtn.setImageResource(R.drawable.ic_send);
         sendBtn.setColorFilter(Color.WHITE);
         sendBtn.setScaleType(ImageView.ScaleType.CENTER);
-        bar.addView(sendBtn, new LinearLayout.LayoutParams(dp(c, 42), dp(c, 42)));
+        bar.addView(sendBtn, new LinearLayout.LayoutParams(dp(c, 48), dp(c, 48)));
         Runnable doSend = () -> {
             String txt = et.getText().toString().trim();
             if (txt.isEmpty()) return;
@@ -489,10 +491,11 @@ public class NotifUi {
         b.setGravity(Gravity.CENTER);
         b.setSingleLine(true);
         b.setEllipsize(TextUtils.TruncateAt.END);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         b.setTextColor(primary ? 0xFF111111 : Color.WHITE);
-        b.setPadding(dp(c, 10), dp(c, 9), dp(c, 10), dp(c, 9));
+        b.setMinHeight(dp(c, 46));
+        b.setPadding(dp(c, 12), dp(c, 12), dp(c, 12), dp(c, 12));
         GradientDrawable g = new GradientDrawable();
         g.setCornerRadius(dp(c, 16));
         g.setColor(primary ? 0xF2FFFFFF : 0x2EFFFFFF);

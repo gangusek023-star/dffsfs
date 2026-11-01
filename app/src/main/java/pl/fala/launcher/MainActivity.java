@@ -666,6 +666,7 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams ilp = (FrameLayout.LayoutParams) island.getLayoutParams();
         ilp.topMargin = IslandView.topFor(this, cutout, insetTop, island.idleH());
         island.setLayoutParams(ilp);
+        island.setCoverTop(insetTop - ilp.topMargin);
 
         adapter.notifyDataSetChanged();
     }
