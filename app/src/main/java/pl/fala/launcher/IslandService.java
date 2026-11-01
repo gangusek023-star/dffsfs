@@ -45,6 +45,8 @@ public class IslandService extends Service {
     private IslandController ctl;
     private WindowManager.LayoutParams lp;
     private boolean attached = false;
+    GameMode game;
+    private boolean inGame = false;
     private boolean fullscreenApp = false;
     private boolean locked = false;
     private BroadcastReceiver screenReceiver;
@@ -90,6 +92,9 @@ public class IslandService extends Service {
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         buildOverlay();
         LockActivity.ensureScreenReceiver(getApplicationContext());
+        game = new GameMode(this, wm);
+        game.start();
+        updateVisibility();
 
         screenReceiver = new BroadcastReceiver() {
             @Override
@@ -133,6 +138,7 @@ public class IslandService extends Service {
         instance = null;
         try { if (screenReceiver != null) unregisterReceiver(screenReceiver); } catch (Exception ignored) { }
         if (ctl != null) ctl.stop();
+        if (game != null) game.stop();
         if (attached) {
             try { wm.removeView(root); } catch (Exception ignored) { }
             attached = false;
@@ -286,19 +292,40 @@ public class IslandService extends Service {
 
     static boolean isShowing() {
         IslandService s = instance;
-        return s != null && s.attached && s.root != null;
+        return s != null && s.attached && s.root != null && s.islandOn();
+    }
+
+    private boolean islandOn() {
+        return getSharedPreferences("fala", MODE_PRIVATE).getBoolean("island_global", true);
+    }
+
+    /** Czy usługa jest potrzebna: wyspa wszędzie albo Tryb Ultra Gry. */
+    static boolean wanted(Context c) {
+        return c.getSharedPreferences("fala", MODE_PRIVATE).getBoolean("island_global", true)
+                || GameMode.enabled(c);
+    }
+
+    void setInGame(boolean g) {
+        inGame = g;
+        if (g && island != null) island.collapse();
+        updateVisibility();
+    }
+
+    void refreshVisibility() {
+        updateVisibility();
     }
 
     private void updateVisibility() {
         if (root == null) return;
-        boolean show = !locked && !fullscreenApp;
+        boolean show = islandOn() && !locked && !fullscreenApp && !inGame;
         root.setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
     // ---------- powiadomienia na wyspie ----------
 
     void onNotification(StatusBarNotification sbn) {
-        if (island == null || locked || fullscreenApp) return;
+        if (island == null || locked || fullscreenApp || !islandOn()) return;
+        if (inGame && getSharedPreferences("fala", MODE_PRIVATE).getBoolean("game_block_banners", true)) return;
         if (!getSharedPreferences("fala", MODE_PRIVATE).getBoolean("island_notifs", true)) return;
         if (sbn.isOngoing() || sbn.getPackageName().equals(getPackageName())) return;
         Notification n = sbn.getNotification();

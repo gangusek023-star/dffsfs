@@ -1328,6 +1328,17 @@ public class MainActivity extends Activity {
                 loadApps();
             });
         }
+        final String pkgName = a.component.getPackageName();
+        if (GameMode.isGame(this, pkgName)) {
+            labels.add("🎮  To nie jest gra");
+            actions.add(() -> GameMode.markGame(this, pkgName, false));
+        } else {
+            labels.add("🎮  To jest gra (Tryb Ultra Gry)");
+            actions.add(() -> {
+                GameMode.markGame(this, pkgName, true);
+                Toast.makeText(this, "Dodano do gier – tryb włączy się po jej uruchomieniu", Toast.LENGTH_SHORT).show();
+            });
+        }
         labels.add("ⓘ  Informacje o aplikacji");
         actions.add(() -> {
             try {
@@ -1360,6 +1371,8 @@ public class MainActivity extends Activity {
     private void toggleGlobalIsland() {
         boolean on = !globalIslandPref();
         prefs.edit().putBoolean("island_global", on).apply();
+        IslandService s0 = IslandService.instance;
+        if (s0 != null) s0.refreshVisibility();
         if (on && !Settings.canDrawOverlays(this)) {
             askOverlay();
         }
@@ -1374,10 +1387,12 @@ public class MainActivity extends Activity {
 
     /** Wyspa nad wszystkimi aplikacjami (usługa) albo tylko na ekranie głównym. */
     private void updateGlobalIsland() {
-        boolean want = globalIslandPref();
+        boolean want = IslandService.wanted(this);
         boolean can = Settings.canDrawOverlays(this);
         if (want && can) {
             IslandService.start(this);
+            IslandService s = IslandService.instance;
+            if (s != null) s.refreshVisibility();
             // własna wyspa launchera zostaje, dopóki nakładka faktycznie się nie pokaże
             island.setVisibility(IslandService.isShowing() ? View.GONE : View.VISIBLE);
             main.postDelayed(() -> island.setVisibility(IslandService.isShowing() ? View.GONE : View.VISIBLE), 900);
@@ -1393,9 +1408,101 @@ public class MainActivity extends Activity {
             setupDlg.dismiss();
             showSetup();
         }
+        if (gameDlg != null && gameDlg.isShowing()) {
+            gameDlg.dismiss();
+            showGameSettings();
+        }
     }
 
     private AlertDialog setupDlg;
+    private AlertDialog gameDlg;
+
+    /** Ustawienia Trybu Ultra Gry. */
+    private void showGameSettings() {
+        LinearLayout box = dialogBox("🎮  Tryb Ultra Gry");
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        sv.addView(col);
+
+        TextView intro = new TextView(this);
+        intro.setText("Gdy uruchomisz grę, przy prawej krawędzi pojawi się kolorowy uchwyt. Dotknij go lub przesuń w lewo, aby otworzyć panel gry.");
+        intro.setTextColor(0xB3FFFFFF);
+        intro.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        intro.setLineSpacing(dp(2), 1f);
+        intro.setPadding(dp(4), 0, dp(4), dp(8));
+        col.addView(intro);
+
+        boolean on = GameMode.enabled(this);
+        col.addView(setupRow(on, on ? "Tryb Ultra Gry: włączony" : "Tryb Ultra Gry: wyłączony",
+                "Dotknij, aby włączyć", () -> {
+                    prefs.edit().putBoolean("game_mode", !GameMode.enabled(this)).apply();
+                    updateGlobalIsland();
+                    gameDlg.dismiss();
+                    showGameSettings();
+                }));
+        col.addView(setupRow(GameMode.hasUsageAccess(this), "Dostęp do użycia aplikacji",
+                "Potrzebny, żeby wykryć, że włączasz grę – znajdź Falę i zezwól",
+                () -> safeStart(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))));
+        col.addView(setupRow(Settings.canDrawOverlays(this), "Wyświetlanie nad aplikacjami",
+                "Potrzebne dla panelu i licznika w grze", this::askOverlay));
+        col.addView(setupRow(Settings.System.canWrite(this), "Zmiana jasności",
+                "Potrzebne do chłodzenia (przyciemnianie ekranu)",
+                () -> safeStart(new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:" + getPackageName())))));
+        col.addView(setupRow(IslandController.hasNotificationAccess(this), "Dostęp do powiadomień",
+                "Potrzebny dla „Nie przeszkadzać” w grze",
+                () -> safeStart(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))));
+
+        col.addView(sectionLabel("PO WEJŚCIU DO GRY"));
+        col.addView(sectionLabel("Licznik na ekranie"));
+        col.addView(chips(new String[]{"Pokaż", "Ukryj"}, prefs.getBoolean("game_hud", true) ? 0 : 1,
+                i -> prefs.edit().putBoolean("game_hud", i == 0).apply()));
+        col.addView(sectionLabel("Nie przeszkadzać"));
+        col.addView(chips(new String[]{"Automatycznie", "Ręcznie"}, prefs.getBoolean("game_auto_dnd", false) ? 0 : 1,
+                i -> prefs.edit().putBoolean("game_auto_dnd", i == 0).apply()));
+        col.addView(sectionLabel("Chłodzenie"));
+        col.addView(chips(new String[]{"Automatycznie", "Ręcznie"}, prefs.getBoolean("game_auto_cool", false) ? 0 : 1,
+                i -> prefs.edit().putBoolean("game_auto_cool", i == 0).apply()));
+        col.addView(sectionLabel("Banery wyspy w grze"));
+        col.addView(chips(new String[]{"Blokuj", "Pokazuj"}, prefs.getBoolean("game_block_banners", true) ? 0 : 1,
+                i -> prefs.edit().putBoolean("game_block_banners", i == 0).apply()));
+
+        col.addView(sectionLabel("WYKRYTE GRY"));
+        StringBuilder sb = new StringBuilder();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (App a : apps) {
+            String pkg = a.component.getPackageName();
+            if (seen.add(pkg) && GameMode.isGame(this, pkg)) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append(a.label);
+            }
+        }
+        TextView games = new TextView(this);
+        games.setText(sb.length() > 0 ? sb.toString() : "Nie wykryto gier.");
+        games.setTextColor(Color.WHITE);
+        games.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        games.setPadding(dp(4), 0, dp(4), dp(6));
+        col.addView(games);
+        TextView hint = new TextView(this);
+        hint.setText("Brakuje gry albo coś nie jest grą? Przytrzymaj aplikację w szufladzie i wybierz „To jest gra” / „To nie jest gra”.\n\nUwaga: FPS samej gry nie da się odczytać bez roota – licznik pokazuje odświeżanie ekranu (Hz). Ping mierzony jest do serwera 1.1.1.1, nie do serwera gry.");
+        hint.setTextColor(0x99FFFFFF);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        hint.setLineSpacing(dp(2), 1f);
+        hint.setPadding(dp(4), dp(6), dp(4), 0);
+        col.addView(hint);
+
+        box.addView(sv, new LinearLayout.LayoutParams(-1, Math.round(getResources().getDisplayMetrics().heightPixels * 0.62f)));
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
+        LinearLayout btns = new LinearLayout(this);
+        btns.setGravity(Gravity.END);
+        btns.setPadding(0, dp(10), 0, 0);
+        TextView done = dialogButton("Gotowe");
+        done.setOnClickListener(v -> dlg.dismiss());
+        btns.addView(done);
+        box.addView(btns);
+        gameDlg = dlg;
+        showGlassDialog(dlg);
+    }
 
     private boolean isDefaultHome() {
         try {
@@ -1910,6 +2017,8 @@ public class MainActivity extends Activity {
         List<Runnable> actions = new ArrayList<>();
         labels.add("⚙  Konfiguracja i uprawnienia");
         actions.add(this::showSetup);
+        labels.add("🎮  Tryb Ultra Gry");
+        actions.add(this::showGameSettings);
         labels.add("✦  Zapytaj Falę (asystent)");
         actions.add(this::openAssistant);
         labels.add("✦  Asystent: klucz API i głos");
