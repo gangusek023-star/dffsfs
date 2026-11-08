@@ -243,6 +243,11 @@ public class GameMode {
     void start() {
         if (running) return;
         running = true;
+        // po restarcie aplikacji przywróć jasność, jeśli chłodzenie zostało włączone
+        if (prefs.getBoolean("cool_active", false)) {
+            coolByUs = true;
+            setCooling(false);
+        }
         main.post(poll);
     }
 
@@ -281,16 +286,33 @@ public class GameMode {
             }
         }
         final boolean game = g;
+        final boolean transient_ = isTransient(fg);
         main.post(() -> {
             if (game) {
+                notGameStreak = 0;
                 if (!fg.equals(currentGame)) {
                     if (currentGame != null) exitGame();
                     enterGame(fg);
                 }
-            } else if (currentGame != null) {
-                exitGame();
+            } else if (currentGame != null && !transient_) {
+                // pojedynczy odczyt „nie gra” (reklama, okno logowania) nie wyłącza trybu od razu
+                if (++notGameStreak >= 3) {
+                    notGameStreak = 0;
+                    exitGame();
+                }
             }
         });
+    }
+
+    private int notGameStreak = 0;
+
+    /** Okna systemu, klawiatury i usług Google, które na chwilę wchodzą na wierzch gry. */
+    private static boolean isTransient(String pkg) {
+        return pkg.equals("android") || pkg.startsWith("com.android.systemui")
+                || pkg.contains("inputmethod") || pkg.contains("keyboard")
+                || pkg.equals("com.google.android.gms") || pkg.equals("com.google.android.play.games")
+                || pkg.equals("com.android.permissioncontroller") || pkg.equals("com.google.android.permissioncontroller")
+                || pkg.startsWith("com.motorola.") && pkg.contains("game");
     }
 
     /** Gra uruchomiona z ekranu głównego Fali – działa nawet bez dostępu do użycia aplikacji. */
@@ -804,11 +826,12 @@ public class GameMode {
             if (on && !coolByUs) {
                 int mode = Settings.System.getInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE, 0);
                 int b = Settings.System.getInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, 128);
-                prefs.edit().putInt("cool_prev_mode", mode).putInt("cool_prev_b", b).apply();
-                Settings.System.putInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE,
-                        Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL);
-                Settings.System.putInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS,
-                        Math.max(20, Math.round(b * 0.6f)));
+                boolean dim = mode == Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL && b > 60;
+                prefs.edit().putInt("cool_prev_b", b).putBoolean("cool_dimmed", dim)
+                        .putBoolean("cool_active", true).apply();
+                // jasność automatyczna zostaje włączona – zmniejszamy tylko ręcznie ustawioną, raz i łagodnie
+                if (dim) Settings.System.putInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS,
+                        Math.round(b * 0.8f));
                 coolByUs = true;
                 final String game = currentGame;
                 bg.execute(() -> {
@@ -824,10 +847,16 @@ public class GameMode {
                 });
                 Toast.makeText(ctx, "❄ Chłodzenie włączone", Toast.LENGTH_SHORT).show();
             } else if (!on && coolByUs) {
-                Settings.System.putInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS,
-                        prefs.getInt("cool_prev_b", 128));
-                Settings.System.putInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE,
-                        prefs.getInt("cool_prev_mode", 0));
+                if (prefs.getBoolean("cool_dimmed", false)) {
+                    Settings.System.putInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS,
+                            prefs.getInt("cool_prev_b", 128));
+                }
+                // starsze wersje Fali przełączały tryb – oddaj jasność automatyczną, jeśli była
+                if (prefs.contains("cool_prev_mode")) {
+                    Settings.System.putInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE,
+                            prefs.getInt("cool_prev_mode", 0));
+                }
+                prefs.edit().remove("cool_prev_mode").putBoolean("cool_active", false).putBoolean("cool_dimmed", false).apply();
                 coolByUs = false;
             }
             return true;

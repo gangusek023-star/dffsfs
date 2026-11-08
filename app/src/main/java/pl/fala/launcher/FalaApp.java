@@ -16,9 +16,31 @@ public class FalaApp extends Application {
         return new File(c.getFilesDir(), "crash.txt");
     }
 
+    /**
+     * Gdy w telefonie wyłączone są animacje („Usuń animacje” / skala animacji 0), wszystkie animacje
+     * Fali przeskakują od razu do końca. Przywracamy normalne tempo tylko dla Fali.
+     */
+    static void forceAnimations() {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                java.lang.reflect.Method g = android.animation.ValueAnimator.class.getMethod("getDurationScale");
+                float s = (Float) g.invoke(null);
+                if (s >= 0.5f) return;
+            }
+            java.lang.reflect.Method m = android.animation.ValueAnimator.class.getMethod("setDurationScale", float.class);
+            m.invoke(null, 1f);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    static boolean animationsOff() {
+        return Build.VERSION.SDK_INT >= 26 && !android.animation.ValueAnimator.areAnimatorsEnabled();
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
+        forceAnimations();
         final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
             try {

@@ -287,6 +287,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        FalaApp.forceAnimations();
+        if (FalaApp.animationsOff()) main.postDelayed(this::animationsHint, 1200);
         IslandService gs = IslandService.instance;
         if (gs != null && gs.game != null) gs.game.onHomeVisible();
         islandCtl.refresh();
@@ -1027,7 +1029,23 @@ public class MainActivity extends Activity {
     }
 
     /** Kaskadowe wejście elementów (jak w iOS po powrocie na ekran główny). */
-    private boolean entranceDone, backFromApp;
+    private boolean entranceDone, backFromApp, animHintShown;
+
+    /** Animacje systemowo wyłączone i nie dało się ich włączyć dla Fali – podpowiedź, jak to zmienić. */
+    private void animationsHint() {
+        if (animHintShown || !FalaApp.animationsOff() || isFinishing()) return;
+        animHintShown = true;
+        if (getSharedPreferences("fala", MODE_PRIVATE).getBoolean("anim_hint_never", false)) return;
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Animacje są wyłączone w telefonie")
+                .setMessage("Android ma wyłączone animacje, więc Fala nie może ich pokazać.\n\n"
+                        + "Wyłącz „Usuń animacje” w Ustawieniach → Ułatwienia dostępu → Kolor i ruch, "
+                        + "albo w Opcjach programisty ustaw „Skala animacji” na 1x.")
+                .setPositiveButton("Otwórz ustawienia", (d2, w) -> safeStart(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)))
+                .setNeutralButton("Opcje programisty", (d2, w) -> safeStart(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)))
+                .setNegativeButton("Nie pokazuj", (d2, w) -> getSharedPreferences("fala", MODE_PRIVATE).edit().putBoolean("anim_hint_never", true).apply())
+                .show();
+    }
 
     private void playEntrance() {
         if (homeCtl.editing()) return;
@@ -1038,7 +1056,7 @@ public class MainActivity extends Activity {
             homeContent.animate().cancel();
             homeContent.setScaleX(1.07f);
             homeContent.setScaleY(1.07f);
-            homeContent.setAlpha(0.3f);
+            homeContent.setAlpha(0.85f);
             homeContent.animate().scaleX(1f).scaleY(1f).alpha(1f).setStartDelay(0).setDuration(340)
                     .setInterpolator(smooth).withLayer().start();
             return;

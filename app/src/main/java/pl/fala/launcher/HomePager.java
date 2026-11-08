@@ -125,7 +125,7 @@ public class HomePager extends ViewGroup {
             float s = 1f - 0.08f * off;
             c.setScaleX(s);
             c.setScaleY(s);
-            c.setAlpha(1f - 0.55f * off);
+            c.setAlpha(1f - 0.2f * off);
         }
     }
 
